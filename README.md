@@ -18,7 +18,7 @@ conda create -n calib python=3.8
 conda activate calib
 pip install  scipy g2o-python opencv-contrib-python=4.9.0.80 matplotlib 
 ```
-## Date preparation 
+## Data preparation 
 Our repository expect the following dataset structure in the source path location :
 ```
 <location>
