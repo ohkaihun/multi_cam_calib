@@ -183,7 +183,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../sfm1/archive/bimage_fisheye_multicharuco_360')
     parser.add_argument('--out_path', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360')
-    parser.add_argument('--pattern', default=(4,6))
+    parser.add_argument('--pattern', type=float,default=(4,6))
     parser.add_argument('--gridsize', type=float,default=0.197)
     parser.add_argument('--ext', type=str,default='.png')
     parser.add_argument('--num',type=int, default=18)
