@@ -42,7 +42,7 @@ run calibration in 2 steps.
 - num_board: Number of boards
 ```shell
 python CalibIntri_fisheye.py --root_path ../sfm1/archive/bimage_fisheye_multicharuco_360  --out_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360 --pattern 4 6 --gridsize 0.197 --ext .png  --num 18 --is_charu --is_fisheye  --num_board 6
-python CalibExtri_fisheye.py --root_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360 --pattern (4,6) --num_board 6 --num 18 
+python CalibExtri_fisheye.py --root_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360 --pattern 4 6 --num_board 6 --num 18 
 ```
 then use script to visualize the results.
 ```shell
