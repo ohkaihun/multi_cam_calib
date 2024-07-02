@@ -783,7 +783,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--out_path', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360')
-    parser.add_argument('--pattern', default=(4,6))
+    parser.add_argument('--pattern', type=int, nargs='+', default=[4, 6])
     parser.add_argument('--num',type=int, default=18)
     parser.add_argument('--num_board', type=int, default=6)
     args = parser.parse_args()
