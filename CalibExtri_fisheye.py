@@ -793,7 +793,7 @@ if __name__ == '__main__':
 
 
 # calibExtri(os.path.join('sfm1',"archive", "output_bimage_fisheye_charuco"))
-calibExtri(os.path.join('../sfm1',"archive", "output_bimage_fisheye_multicharuco_360"),num_board=6,num_pic=18,pattern=(4,6))
+# calibExtri(os.path.join('../sfm1',"archive", "output_bimage_fisheye_multicharuco_360"),num_board=6,num_pic=18,pattern=(4,6))
 # calibExtri(os.path.join('sfm1',"archive", "bimage_fisheye_chess"), os.path.join('sfm1',"archive", "output_bimage_fisheye_chessboard"), (9,6), 0.024, ".png",is_charu=False,is_fisheye=True)
 # calibExtriusingcolmap(os.path.join('sfm1',"archive", "bimage_fisheye_chess"), os.path.join('sfm1',"archive", "output_bimage_fisheye_chessboard"), (9,6), 0.024, ".png",is_charu=False,is_fisheye=True,num_board=1)
 # calibExtri(os.path.join("Image", "ExtriImage"), "OutPut", (9,6), 1, ".jpg")
