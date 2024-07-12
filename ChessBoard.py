@@ -148,8 +148,29 @@ def _findCharucoboardCorners(img, pattern,board_index):
             # cornersWorld.append(np.array(correspondingCornersWorld))
             # image = cv.aruco.drawDetectedCornersCharuco(img, chCorners, chIds)
     # return True,chCorners,chIds
+def distortBackPoints(x, y, cameraMatrix, dist):
 
-def findChessboardCorners(img, pointData, pattern,is_charu,num_board):
+    fx = cameraMatrix[0,0]
+    fy = cameraMatrix[1,1]
+    cx = cameraMatrix[0,2]
+    cy = cameraMatrix[1,2]
+    k1 = dist[0][0] * -1
+    k2 = dist[0][1] * -1
+    k3 = dist[0][2] * -1
+    k4 =dist[0][3]*-1
+    x = (x - cx) / fx
+    y = (y - cy) / fy
+
+    r2 = x*x + y*y
+
+    xDistort = x * (1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2)
+    yDistort = y * (1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2)
+
+    xDistort = xDistort * fx + cx;
+    yDistort = yDistort * fy + cy;
+
+    return xDistort, yDistort
+def findChessboardCorners(img, pointData, pattern,is_charu,is_fisheye,num_board,type,old_k,dist):
     '''
     pointData:        template = {
                                 'imageName': None,
@@ -188,6 +209,7 @@ def findChessboardCorners(img, pointData, pattern,is_charu,num_board):
         # counting detected boards
         num_board_detected=0#counting detected boards
         for board_index in range(num_board):
+            objp=[]
             ##return coordinates&chids of corners of board
             ret, corners, chids = _findCharucoboardCorners(gray, pattern,board_index)  ##return coordinates&chids of corners of board
             if ret:
@@ -204,9 +226,26 @@ def findChessboardCorners(img, pointData, pattern,is_charu,num_board):
                 pointData[f'keyPoints3d_{board_index}'] = new_points3d #save points of No.board_index charuco-board
                 mask=np.array(mask).tolist()
                 pointData[f'mask_{board_index}']=mask
-                corners = corners.squeeze()
-                corners = np.hstack((corners, np.ones((corners.shape[0], 1))))[:, :2]
-                pointData[f'keyPoints2d_{board_index}'] = corners.tolist()
+                if type=="Intri_backproject" and is_fisheye:
+
+                    newcorner = corners.squeeze()
+                    objp = np.column_stack([(newcorner[:, 0] - old_k[0, 2]) / old_k[0, 0],
+                                                 (newcorner[:, 1] - old_k[1, 2]) / old_k[1, 1],
+                                                 np.zeros(len(newcorner))])
+                    objp = objp.astype(np.float32)
+                    objp = np.expand_dims(objp, axis=1)
+                    rvec = np.array([[[0., 0., 0.]]])
+                    tvec = np.array([[[0., 0., 0.]]])
+                    newcorner, _ = cv2.fisheye.projectPoints(objp, rvec, tvec, old_k, dist)
+                    # newcorner = np.hstack((newcorner, np.ones((newcorner.shape[0], 1))))[:, :2]
+                    pointData[f'keyPoints2d_{board_index}'] = newcorner.tolist()
+                # elif type=="Intri_undistorted" and not is_fisheye:
+                #     newcorner = cv2.undistortPoints(corners, old_k, dist)
+                #     pointData[f'keyPoints2d_{board_index}'] = newcorner.tolist()
+                else:
+                    corners = corners.squeeze()
+                    corners = np.hstack((corners, np.ones((corners.shape[0], 1))))[:, :2]
+                    pointData[f'keyPoints2d_{board_index}'] = corners.tolist()
         pointData['num_board_detected'] = num_board_detected
         if num_board_detected ==0:
             return None
@@ -237,7 +276,7 @@ def _findChessboardCornersAdapt(img, pattern):
     return _findChessboardCorners(img, pattern)
 
 #imgPath:带路径的图片名，outPath，输出目录，type ,Intri或者是Extri,ext后缀，jpg或者png
-def detect_chessboard(imgPath, outPath, type, pattern, gridSize, ext,is_charu,num_board):
+def detect_chessboard(imgPath, outPath, type, pattern, gridSize, ext,is_charu,is_fisheye,num_board,old_k,dist):
     """
     type:Original corners detection / Undistorted corners detection
     pattern:Number of squares horizontally & vertically ,[4,6]
@@ -251,29 +290,13 @@ def detect_chessboard(imgPath, outPath, type, pattern, gridSize, ext,is_charu,nu
     pointData = create_chessboard(pattern, gridSize,is_charu,num_board) # Pointdata format
     pointData['imageName'] = imgPath.split(os.sep)[-1]
     img = cv2.imread(imgPath)
-    show = findChessboardCorners(img, pointData, pattern,is_charu,num_board) #Show is a picture with blue corner points attached with id.
+    show = findChessboardCorners(img, pointData, pattern,is_charu,is_fisheye,num_board,type,old_k,dist) #Show is a picture with blue corner points attached with id.
     pointData['iHeight'] = img.shape[0]
     pointData['iWidth'] = img.shape[1]
     if show is None:
         print(imgPath,":find chessboard corners failed")
-        return False
+        return False,pointData
     else:
-        save_json(os.path.join(outPath, "PointData", type,  os.sep.join(imgPath.split(os.sep)[-2:]).replace(ext, ".json")), pointData) # save pointdata
-        cv2.imwrite(os.path.join(outPath, "DrawCorner", type, os.sep.join(imgPath.split(os.sep)[-2:])), show)  #save pic
-        return True
-# def detect_charuco(imgPath, outPath, type, pattern, gridSize, ext,is_charu):
-#     pointData = create_chessboard(pattern, gridSize)
-#     pointData['imageName'] = imgPath.split(os.sep)[-1]
-#     img = cv2.imread(imgPath)
-#     #img = cv2.resize(img,(1224,1024))
-#     show = findChessboardCorners(img, pointData, pattern,is_charu)
-#     pointData['iHeight'] = img.shape[0]
-#     pointData['iWidth'] = img.shape[1]
-#     if show is None:
-#         print(imgPath,":find chessboard corners failed")
-#         return False
-#     else:
-#         save_json(os.path.join(outPath, "PointData", type,  os.sep.join(imgPath.split(os.sep)[-2:]).replace(ext, ".json")), pointData)
-#         cv2.imwrite(os.path.join(outPath, "DrawCorner", type, os.sep.join(imgPath.split(os.sep)[-2:])), show)
-#         return True
-#detect_chessboard(os.path.join("Image","IntriImage","0","image_1.jpg"), "OutPut", "Intri", (9,6),1, ".jpg")
+        # save_json(os.path.join(outPath, "PointData", type,  os.sep.join(imgPath.split(os.sep)[-2:]).replace(ext, ".json")), pointData) # save pointdata
+        cv2.imwrite(os.path.join(outPath, "DrawCorner", type, os.sep.join(imgPath.split(os.sep)[-1:])), show)  #save pic
+        return True,pointData

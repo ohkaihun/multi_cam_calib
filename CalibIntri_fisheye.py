@@ -4,7 +4,7 @@ import os
 from FileUtils import save_json, read_json, getFileList, makeDir
 from ChessBoard import detect_chessboard
 import argparse
-
+import pandas as pd #install tabulate
 # 寻找单应矩阵，计算重投影误差
 def reProjection(pointData,is_charu,num_board):
     if is_charu:
@@ -33,13 +33,13 @@ def reProjection(pointData,is_charu,num_board):
 
 #得到单个相机的内参K和畸变系数D后，对数据去畸变
 def undistort(img_path,K,D,k0,dim2,dim3,scale=0.6,imshow=False):#scale=1,图像越小
-    DIM=[1200,1200]
+    # DIM=[1200,1200]
     # balance=0.6
     if k0 is None:
         k0=K
     img = cv2.imread(img_path)
     dim1 = img.shape[:2][::-1]  # dim1 is the dimension of input image to un-distort
-    assert dim1[0] / dim1[1] == DIM[0] / DIM[
+    assert dim1[0] / dim1[1] == dim2[0] / dim2[
         1], "Image to undistort needs to have same aspect ratio as the ones used in calibration"
     if not dim2:
         dim2 = dim1
@@ -73,8 +73,15 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
 
     calibrate intri parameters
     """
+    pointcorner_data = {
+        'Cam': [1, 2, 3]
+    }
     annots = {'cams': {
     }}
+    before_point_list=[]
+    after_point_list=[]
+
+
     iFolder = getFileList(rootiPath, ext)
     camIds = [cam['camId'] for cam in iFolder]
     makeDir(outPath, camIds)
@@ -82,6 +89,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
     for cam in iFolder:
         dataList = []
         intriPara = {}
+        point_num=0
         for imgName in cam['imageList']:
             if detect_chessboard(os.path.join(rootiPath, cam['camId'], imgName), outPath, "Intri", pattern, gridSize, ext,is_charu,num_board):
                 pointData = read_json(os.path.join(outPath, "PointData", "Intri", cam['camId'], imgName.replace(ext,'.json')))
@@ -106,6 +114,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
             if data['selected'] == True & is_charu :
                 for board_index in range(num_board):
                     if f'mask_{board_index}'  in data:
+                        point_num+=len(data[f'mask_{board_index}'])
                         point2dList.append(np.expand_dims(np.array(data[f'keyPoints2d_{board_index}'],dtype=np.float32),0))
                         point3dList.append(np.expand_dims(np.array(data[f'keyPoints3d_{board_index}'],dtype=np.float32),0))
                     else:
@@ -115,7 +124,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
                 point3dList.append(np.expand_dims(np.array(data['keyPoints3d'], dtype=np.float32), 0))
             else:
                 pass
-
+        before_point_list.append(point_num)
         #do intri calibration using opencv2  cv2.calibrateCamera or  cv2.fisheye.calibrate
         if not is_fisheye:
             # 采用np.stack 对矩阵进行叠加,类型必须为float32，float64不可以
@@ -138,7 +147,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
             #     undistorted_img, new_k= undistort(img_path, K, dist, k0=None,dim2=[1200, 1200], dim3=[1200, 1200])
             #     k0=new_k
             # else:
-            undistorted_img,new_k=undistort(img_path,K,dist,k0=None,dim2=[1200,1200],dim3=[1200,1200])
+            undistorted_img,new_k=undistort(img_path,K,dist,k0=None,dim2=[2448,2048],dim3=[ 2448,2048])
             out_path=os.path.join(os.path.join(outPath,'undistorted',cam['camId'], imgName))
             cv2.imwrite(out_path,undistorted_img)
 
@@ -158,6 +167,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
     for cam in iFolder:
         dataList = []
         intriPara = {}
+        point_num=0
         for imgName in cam['imageList']:
             if detect_chessboard(os.path.join(outPath,'undistorted', cam['camId'], imgName), outPath, "Intri_undistorted", pattern, gridSize, ext,is_charu,num_board):
                 pointData = read_json(os.path.join(outPath, "PointData", "Intri_undistorted", cam['camId'], imgName.replace(ext,'.json')))
@@ -176,14 +186,22 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num,is_charu,is_fishey
                 data['selected'] = True
                 i = i + 1
             save_json(os.path.join(outPath, "PointData", "Intri_undistorted", cam["camId"], data['imageName'].replace(ext, ".json")), data)
-
+        for data in dataList:
+            for board_index in range(num_board):
+                if f'mask_{board_index}' in data:
+                    point_num += len(data[f'mask_{board_index}'])
+        after_point_list.append(point_num)
+    pointcorner_data['去畸变前角点数目']=before_point_list
+    pointcorner_data['去畸变后角点数目']=after_point_list
+    df = pd.DataFrame(pointcorner_data)
+    print(df.to_markdown(index=False))
 if __name__ == '__main__':
     # torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_path', type=str, default='../sfm1/archive/bimage_fisheye_multicharuco_360')
     parser.add_argument('--out_path', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360')
-    parser.add_argument('--pattern', default=(4,6))
+    parser.add_argument('--pattern', type=int, nargs='+', default=[4, 6])
     parser.add_argument('--gridsize', type=float,default=0.197)
     parser.add_argument('--ext', type=str,default='.png')
     parser.add_argument('--num',type=int, default=18)

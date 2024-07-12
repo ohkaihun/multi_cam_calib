@@ -1,13 +1,73 @@
-import numpy as np
-import cv2
 from typing import *
 import os,json
 from scipy.optimize import least_squares
-from FileUtils import save_json, read_json, getFileList, makeDir
+from FileUtils import save_json, read_json, getFileList, makeDir ,getFileList_aligned
 import glob
 import g2o
-import struct
+import struct,random
+import numpy as np
+import cv2
+from ChessBoard import detect_chessboard
 import argparse
+import pandas as pd #install tabulate
+
+##intri
+# 寻找单应矩阵，计算重投影误差
+def reProjection(pointData,is_charu,num_board):
+    if is_charu:
+        error=0
+        for board_index in range(num_board) :
+            if f'mask_{board_index}' not in pointData:
+                continue
+            pointDetect = np.array(pointData[f'keyPoints2d_{board_index}'], dtype=np.float32)
+            pointBoard = np.array(pointData[f'keyPoints3d_{board_index}'], dtype=np.float32)[:, :2]
+            transMat, __ = cv2.findHomography(pointDetect, pointBoard, cv2.RANSAC, 1.0)
+            # 使用perspectiveTransform时，需要注意，二维变三维， 整形转float型
+            pointAfter = cv2.perspectiveTransform(pointDetect.reshape(1, -1, 2), transMat)
+            pointAfter=  np.squeeze(pointAfter, axis=0)
+            error+=np.sum((pointBoard-pointAfter)*(pointBoard-pointAfter))
+            #print(pointBoard)
+            #print(pointAfter)
+            #print(pointBoard-pointAfter)
+        return error
+    else:
+        pointDetect = np.array(pointData['keyPoints2d'], dtype=np.float32)
+        pointBoard = np.array(pointData['keyPoints3d'], dtype=np.float32)[:, :2]
+        transMat, __ = cv2.findHomography(pointDetect, pointBoard, cv2.RANSAC, 1.0)
+        # 使用perspectiveTransform时，需要注意，二维变三维， 整形转float型
+        pointAfter = cv2.perspectiveTransform(pointDetect.reshape(1, -1, 2), transMat)
+        return np.sum((pointBoard - pointAfter) * (pointBoard - pointAfter))
+
+#得到单个相机的内参K和畸变系数D后，对数据去畸变
+def undistort(img_path,K,D,is_fisheye,k0,dim2,dim3,scale=0.6,imshow=False):#scale=1,图像越小
+    # DIM=[1200,1200]
+    # balance=0.6
+    if k0 is None:
+        k0=K
+    img = cv2.imread(img_path)
+    dim1 = img.shape[:2][::-1]  # dim1 is the dimension of input image to un-distort
+    assert dim1[0] / dim1[1] == dim2[0] / dim2[
+        1], "Image to undistort needs to have same aspect ratio as the ones used in calibration"
+    if not dim2:
+        dim2 = dim1
+    if not dim3:
+        dim3 = dim1
+    scaled_K=K.copy()
+    scaled_K[0][0] = K[0][0] * scale  # The values of K is to scale with image dimension.
+    scaled_K[1][1] = K[1][1] * scale  # The values of K is to scale with image dimension.
+    scaled_K[2][2] = 1.0  # Except that K[2][2] is always 1.0
+    # This is how scaled_K, dim2 and balance are used to determine the final K used to un-distort image. OpenCV document failed to make this clear!
+    # new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(scaled_K, D, dim2, np.eye(3), balance=balance)
+    if is_fisheye:
+        map1, map2 = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), k0, dim3, cv2.CV_16SC2)##opencv中的balance难调，我们选择的是K,D到K的映射
+        undistorted_img = cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    else:
+        undistorted_img= cv2.undistort(img, K, D, None)
+
+
+    if imshow:
+        cv2.imshow("undistorted", undistorted_img)
+    return undistorted_img,k0
 def quarternion_to_rotation_matrix(q):
     """
     The formula for converting from a quarternion to a rotation
@@ -29,8 +89,6 @@ def quarternion_to_rotation_matrix(q):
     R33 = 1 - 2 * qx ** 2 - 2 * qy ** 2
     R = np.array([[R11, R12, R13], [R21, R22, R23], [R31, R32, R33]])
     return R
-
-
 def rotationMatrixToQuaternion(R: np.ndarray) -> np.ndarray:
     """Creates a quaternion from a rotation matrix defining a given orientation.
 
@@ -129,8 +187,6 @@ class Point:
     @property
     def z(self) -> float:
         return self.point[2]
-
-
 class Observation:
     """
     data structure:
@@ -150,8 +206,6 @@ class Observation:
     @property
     def v(self) -> float:
         return self.point[1]
-
-
 class Camera:
     """
     data structure:
@@ -177,8 +231,6 @@ class Camera:
     def pose(self, pose: np.array):
         self.R = pose[:3, :3]
         self.t = pose[:3, 3]
-
-
 class Map:
     """
         points: List[Point]
@@ -394,26 +446,26 @@ def isImageValid(imageName, outPath, camIds, ext):
 
 def estimate_pose(pts1, pts2,K1,K2,MASK_i):
 
-    # 基础矩阵
-    F, mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC,0.1)
-    # 选择inlier points
-    pts1 = pts1[mask.ravel() == 1]
-    pts2 = pts2[mask.ravel() == 1]
-    mask_inner=np.array(MASK_i,dtype=int)
-    mask_inner=mask_inner[mask.ravel()==1].tolist()
-    E = np.matmul(np.matmul(np.transpose(K2), F), K1)
-    retval, R, t, mask = cv2.recoverPose(E, pts1, pts2, K1, K2)
-    # return pts1, pts2, mask_inner, R, t
+    # # 基础矩阵
+    # F, mask = cv2.findFundamentalMat(pts1, pts2, cv2.FM_RANSAC,0.1)
+    # # 选择inlier points
+    # pts1 = pts1[mask.ravel() == 1]
+    # pts2 = pts2[mask.ravel() == 1]
+    # mask_inner=np.array(MASK_i,dtype=int)
+    # mask_inner=mask_inner[mask.ravel()==1].tolist()
+    # E = np.matmul(np.matmul(np.transpose(K2), F), K1)
+    # retval, R, t, mask = cv2.recoverPose(E, pts1, pts2)
+    # # return pts1, pts2, mask_inner, R, t
 
 
     # # 使用基础矩阵和本质矩阵估计相机位姿
-    # E, mask = cv2.findEssentialMat(pts1, pts2, K1, cv2.RANSAC,threshold=0.01)
-    # # 选择 inlier points
-    # pts1_inner = pts1[mask.ravel() == 1]
-    # pts2_inner = pts2[mask.ravel()== 1]
-    # mask_inner=np.array(MASK_i,dtype=int)
-    # mask_inner=mask_inner[mask.ravel()==1].tolist()
-    # _, R, t, mask = cv2.recoverPose(E, pts1_inner, pts2_inner, K1)
+    E, mask = cv2.findEssentialMat(pts1, pts2, K1, cv2.RANSAC,threshold=0.01)
+    # 选择 inlier points
+    pts1_inner = pts1[mask.ravel() == 1]
+    pts2_inner = pts2[mask.ravel()== 1]
+    mask_inner=np.array(MASK_i,dtype=int)
+    mask_inner=mask_inner[mask.ravel()==1].tolist()
+    _, R, t, mask = cv2.recoverPose(E, pts1_inner, pts2_inner, K1)
     # _, R, t, _ = cv2.recoverPose(E, src_pts, dst_pts, K)
 
     #使用单应矩阵估计位姿
@@ -606,10 +658,9 @@ def solvePnP(k3d, k2d, K, dist, flag, tryextri=False):
         err = np.linalg.norm(points2d_repro.squeeze() - k2d, axis=1).mean()
     # print(err)
     return err, rvec, tvec, kpts_repro
-def extraPoint(jsonPath,num_board,pattern):
-    if os.path.exists(jsonPath):
-        f = open(jsonPath, 'r')
-        dic = json.load(f)
+def extraPoint(dic_data,frame,num_board,pattern):
+    if dic_data[frame]['valid']==True:
+        dic = dic_data[frame]
         points = np.zeros((0,2), dtype=np.float32)
         masks= []
         num_points_all=pattern[0]*pattern[1]
@@ -622,7 +673,6 @@ def extraPoint(jsonPath,num_board,pattern):
             else:
                 pass
         masks = np.array(masks)
-        f.close()
     else:
         return False,None,None
     return True,points,masks
@@ -673,125 +723,276 @@ def get_points(point1, point2, mask1, mask2):
     mask1_p=[mask1[idx] for idx in mask1_indices]
     mask2_p=[mask2[idx] for idx in mask2_indices]
     return point1_selected, point2_selected,mask1_indices,mask2_indices,mask1_p,mask2_p
+def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_charu,is_fisheye,num_board):
+    """
+    pattern:Number of squares horizontally & vertically ,[4,6]
+    gridSize:Square side length (in m)
+    ext:Data extension ,'.png'
+    num_pic:Number of pics for calibraion
+    is_charu:Charucoboard detection
+    is_fisheye:Fisheye cam system or pinhole cam
+    num_board:Number of boards
 
-#这里的rootiPath希望是image//ExtriImage
-def calibExtri(outPath,num_board,num_pic,pattern):
-    annots = np.load(os.path.join(outPath,"annots.npy"),allow_pickle=True).item()
-    cams = annots['cams'].keys()
-    #save total pointdata KEYPOINTS2D & MASK & KEYPOINTS3D
+    calibrate intri parameters
+    """
+    iFolder = getFileList(rootiPath, ext)
+
+    camIds = [cam['camId'] for cam in iFolder]
+    makeDir(outPath, camIds)
+    pointcorner_data={}
+    pdshow_data = {
+        'Cam':list(range(1, len(camIds)+1))
+    }
+    annots = {'cams': {
+    }}
+    before_point_list=[]
+    after_point_list=[]
+    Ks, Dists=[],[]
+    width,height=0,0
+    # Intri
+    # detect chessboard corners and save the results
+    for cam in iFolder:
+        dataList = []
+        intriPara = {}
+        point_num=0
+        valid_num=0
+        for imgName in cam['imageList']:
+            detect_flag,pointData=detect_chessboard(os.path.join(rootiPath, cam['camId'], imgName), outPath, "Intri", pattern, gridSize, ext,is_charu,is_fisheye,num_board,None,None)
+            if detect_flag==True:
+                # pointData = read_json(os.path.join(outPath, "PointData", "Intri", cam['camId'], imgName.replace(ext,'.json')))
+                reProjErr = float(reProjection(pointData,is_charu,num_board))
+                pointData['reProjErr'] = reProjErr
+                valid_num+=1
+                dataList.append(pointData)
+            else:
+                continue
+        num = len(dataList)# - 5
+        print("cam:",cam['camId'],"use:%02d images"%num)
+        if len(dataList) < num :
+            print("cam:",cam['camId'], "calibrate intri failed: doesn't have enough valid image")
+            continue
+        dataList = sorted(dataList, key = lambda x: x['reProjErr'])
+        i = 0
+        for data in dataList:
+            if i < num :
+                data['selected'] = True
+                i = i + 1
+        point2dList=[]
+        point3dList=[]
+        for data in dataList:
+            if data['selected'] == True & is_charu   :
+                for board_index in range(num_board):
+                    if f'mask_{board_index}'  in data:
+                        point_num+=len(data[f'mask_{board_index}'])
+                        point2dList.append(np.expand_dims(np.array(data[f'keyPoints2d_{board_index}'],dtype=np.float32),0))
+                        point3dList.append(np.expand_dims(np.array(data[f'keyPoints3d_{board_index}'],dtype=np.float32),0))
+                    else:
+                        pass
+            elif not data['selected'] == True& (is_charu):
+                point2dList.append(np.expand_dims(np.array(data['keyPoints2d'], dtype=np.float32), 0))
+                point3dList.append(np.expand_dims(np.array(data['keyPoints3d'], dtype=np.float32), 0))
+            else:
+                pass
+        before_point_list.append(point_num)
+        width=dataList[0]['iWidth']
+        height=dataList[0]['iHeight']
+        #do intri calibration using opencv2  cv2.calibrateCamera or  cv2.fisheye.calibrate
+        if not is_fisheye:
+            # 采用np.stack 对矩阵进行叠加,类型必须为float32，float64不可以
+            ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(point3dList, point2dList, (dataList[0]['iWidth'],dataList[0]['iHeight']), None, None,flags=cv2.CALIB_FIX_K3)
+        else:
+            # point3dList=np.expand_dims(np.asarray(point3dList),1)
+            # point2dList=np.expand_dims(np.asarray(point2dList),1)
+            ret, K, dist, rvecs, tvecs = cv2.fisheye.calibrate(point3dList, point2dList,
+                                                             (dataList[0]['iWidth'], dataList[0]['iHeight']), None,
+                                                             None,flags = cv2.fisheye.CALIB_CHECK_COND+cv2.fisheye.CALIB_FIX_SKEW,
+            criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 30, 1e-6))
+
+
+
+        #Undistort an image using the calibrated intrinsic parameters and distortion coefficients
+        for imgName in cam['imageList']:
+            img_path=os.path.join(os.path.join(rootiPath, cam['camId'], imgName))
+            #save pics
+            undistorted_img,new_k=undistort(img_path,K,dist,is_fisheye,k0=None,dim2=[width,height],dim3=[ width,height])#dim2=[2448,2048],dim3=[ 2448,2048]
+            out_path=os.path.join(os.path.join(outPath,'undistorted',cam['camId'], imgName))
+            cv2.imwrite(out_path,undistorted_img)
+
+        #save results of calibation
+        annots['cams'][cam['camId']] = {
+            'K': K,
+            'D': dist,#np.zeros((5,1))#
+            'new_K':new_k
+        }
+        Ks.append(new_k)
+        Dists.append(dist)
+    np.save(os.path.join(outPath,'annots.npy'), annots)
+    #去畸变后的图片识别角点
+    #detect undistorted pics again and save pointdata
+    for cam in iFolder:
+        dataList = []
+        point_num=0
+        for imgName in cam['imageList']:
+            detect_flag,pointData=detect_chessboard(os.path.join(outPath,'undistorted', cam['camId'], imgName), outPath, "Intri_undistorted", pattern, gridSize, ext,is_charu,is_fisheye,num_board,None,None)
+            if detect_flag==True:
+                pointData['valid']=True
+                reProjErr = float(reProjection(pointData,is_charu,num_board))
+                pointData['reProjErr'] = reProjErr
+                dataList.append(pointData)
+            else:
+                pointData['valid']=False
+                dataList.append(pointData)
+                continue
+        num = len(dataList)  # - 5
+        print("cam:", cam['camId'], "use:%02d images" % num)
+        if len(dataList) < num:
+            print("cam:", cam['camId'], "calibrate intri failed: doesn't have enough valid image")
+            continue
+        # dataList = sorted(dataList, key=lambda x: x['reProjErr'])
+        i = 0
+        for data in dataList:
+            if i < num and data['valid']:
+                data['selected'] = True
+                i = i + 1
+            else:
+                continue
+            for board_index in range(num_board):
+                if f'mask_{board_index}' in data:
+                    point_num += len(data[f'mask_{board_index}'])
+            # save_json(os.path.join(outPath, "PointData", "Intri_undistorted", cam["camId"], data['imageName'].replace(ext, ".json")), data)
+        pointcorner_data[cam['camId']]=dataList
+        # for data in dataList:
+        #     for board_index in range(num_board):
+        #         if f'mask_{board_index}' in data:
+        #             point_num += len(data[f'mask_{board_index}'])
+        after_point_list.append(point_num)
+    pdshow_data['去畸变前角点数目']=before_point_list
+    pdshow_data['去畸变后角点数目']=after_point_list
+    df = pd.DataFrame(pdshow_data)
+    print(df.to_markdown(index=False))
+
+
+
+##Extri
+    # annots = np.load(os.path.join(outPath, "annots.npy"), allow_pickle=True).item()
+    # cams = annots['cams'].keys()
+    # save total pointdata KEYPOINTS2D & MASK & KEYPOINTS3D
     KEYPOINTS2D = []
-    MASK=[]
+    MASK = []
     KEYPOINTS3D = []
-    #read data from intri-corner-undistored
-    for cam in cams:
-        masks=[]
+
+
+
+    for cam in annots['cams'].keys():
+        masks = []
         points = np.zeros((0, 2), dtype=np.float32)
         for frame in range(num_pic):
-            ret,keypoint2d,mask=extraPoint(os.path.join(outPath,"PointData","Intri_undistorted",cam,f'image_{frame:02d}.json'),num_board,pattern)
+            ret, keypoint2d, mask = extraPoint(pointcorner_data[cam],frame, num_board,pattern)
             if not ret:
                 continue
             points = np.vstack((points, keypoint2d))
-            masks = np.concatenate((masks, mask+frame*num_board*pattern[0]*pattern[1]), axis=0) # 拼接
-            masks = np.array(masks,dtype=int)
+            masks = np.concatenate((masks, mask + frame * num_board * pattern[0] * pattern[1]), axis=0)  # 拼接
+            masks = np.array(masks, dtype=int)
         KEYPOINTS2D.append(points)
         MASK.append(masks)
-    #Initialize map for BA
+
+
+    # Initialize map for BA
     map = Map()
-    #Rs Ts SAVE Relative pose
-    #R_abs T_abs SAVE Absolute pose
+    # Rs Ts SAVE Relative pose
+    # R_abs T_abs SAVE Absolute pose
     Rs = []  # 各个相机旋转矩阵,0号相机的旋转矩阵为I，平均向量为0
     Rs.append(np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32))
     Ts = []  # 各个相机平移
     Ts.append(np.array([[0], [0], [0]], dtype=np.float32))
     R_abs = [Rs[0]]
     T_abs = [Ts[0]]
-    #read intri
-    Ks, dist = initIntriParam(outPath,cams)
+    # read intri
+
     '''
         KEYPOINTS2D_NEWLIST Store the common visible points between adjacent cameras 
         MASK_NEWLIST  Store the mask of common visible points between adjacent cameras 
     '''
 
     KEYPOINTS2D_NEWLIST = []
-    MASK_NEWLIST=[]
-    for index in range(len(cams)):
-        i=index%len(cams)#first cam index
-        j=(index+1)%len(cams)#adjacent cam index
-        #Retreive 2d pointdata & mask
-        KEYPOINTS2D_i=KEYPOINTS2D[i]
-        KEYPOINTS2D_j=KEYPOINTS2D[j]
-        mask_i=MASK[i]
-        mask_j=MASK[j]
-        KEYPOINTS2D_i,KEYPOINTS2D_j,MASK_i,MASK_j,mask1_p,mask2_p=get_points(KEYPOINTS2D_i,KEYPOINTS2D_j,mask_i,mask_j)
-
+    MASK_NEWLIST = []
+    for index in range(len(camIds)):
+        i = index % len(camIds)  # first cam index
+        j = (index + 1) % len(camIds)  # adjacent cam index
+        # Retreive 2d pointdata & mask
+        KEYPOINTS2D_i = KEYPOINTS2D[i]
+        KEYPOINTS2D_j = KEYPOINTS2D[j]
+        mask_i = MASK[i]
+        mask_j = MASK[j]
+        KEYPOINTS2D_i, KEYPOINTS2D_j, MASK_i, MASK_j, mask1_p, mask2_p = get_points(KEYPOINTS2D_i, KEYPOINTS2D_j,
+                                                                                    mask_i, mask_j)
+        Ki=Ks[i]
+        Kj=Ks[j]
         # KEYPOINTS2D_i,KEYPOINTS2D_j,MASK_i,R, t = estimate_pose(KEYPOINTS2D_i, KEYPOINTS2D_j, Ks[i],Ks[j],MASK_i)#解出位姿
-        R, t = estimate_pose(KEYPOINTS2D_i, KEYPOINTS2D_j, Ks[i], Ks[j],MASK_i)  # 解出位姿
+        R, t = estimate_pose(KEYPOINTS2D_i, KEYPOINTS2D_j, Ki, Kj, MASK_i)  # 解出位姿
         Rs.append(R)
         Ts.append(t)
         KEYPOINTS2D_NEWLIST.append(KEYPOINTS2D_i)
         KEYPOINTS2D_NEWLIST.append(KEYPOINTS2D_j)
         MASK_NEWLIST.append(MASK_i)
         # 存绝对位姿
-        R_abs.append( np.matmul(R, R_abs[i]))
-        T_abs.append( T_abs[i] + np.matmul(R_abs[i],t))
+        R_abs.append(np.matmul(R, R_abs[i]))
+        T_abs.append(T_abs[i] + np.matmul(R_abs[i], t))
 
-        #Do triangulation
-        keyPoints3d = triangulate(KEYPOINTS2D_i.T, KEYPOINTS2D_j.T, R_abs[i], T_abs[i], R_abs[j], T_abs[j], Ks[i],Ks[j])
-        #save 3d points
+        # Do triangulation
+        keyPoints3d = triangulate(KEYPOINTS2D_i.T, KEYPOINTS2D_j.T, R_abs[i], T_abs[i], R_abs[j], T_abs[j], Ki,
+                                  Kj)
+        # save 3d points
         points = np.array(keyPoints3d)
         os.makedirs(os.path.join(outPath, 'pointcloud'), exist_ok=True)
         filename = f'pointCloud_{index:02d}.ply'
         output_filename = os.path.join(outPath, 'pointcloud', filename)
         write_pointcloud(output_filename, points)
 
-
-        #add data to map
+        # add data to map
         for n, m in enumerate(MASK_i):
             idx3d = mask_i[m]
             map.points.append(Point(idx3d, keyPoints3d.T[:, n]))  # 第一个摄像头的内点用point存
             map.observations.append(Observation(idx3d, i, KEYPOINTS2D_i.T[:, n]))
-            # map.observations.append(Observation(idx3d, j, KEYPOINTS2D_j.T[:, n]))
+            map.observations.append(Observation(idx3d, j, KEYPOINTS2D_j.T[:, n]))
 
-        #save length of masklist
+        # save length of masklist
         map.L.append(len(MASK_i))
-        if index<1:
-            cam = Camera(index, R_abs[0], T_abs[0],True)  # 存下该相机的参数：R,T->POSE
+        if index < 1:
+            cam = Camera(index, R_abs[0], T_abs[0], True)  # 存下该相机的参数：R,T->POSE
         else:
-            cam = Camera(index, R_abs[index], T_abs[index],False)  # 存下该相机的参数：R,T->POSE
+            cam = Camera(index, R_abs[index], T_abs[index], False)  # 存下该相机的参数：R,T->POSE
         map.cameras.append(cam)  # 写入map
         map.K.append(Ks[index])
 
-    print(f"Before BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
-    #Do bundle_adjustment
+    print(
+        f"Before BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
+    # Do bundle_adjustment
     map.bundle_adjustment()
 
-
-
-    #save 3d points after BA
-    points=[]
-    for i in range (len(map.points)):
-        if map.points[i].id<10000:
-            points.append(np.array(map.points[i].point,dtype=np.float32))
+    # save 3d points after BA
+    points = []
+    for i in range(len(map.points)):
+        if map.points[i].id < 10000:
+            points.append(np.array(map.points[i].point, dtype=np.float32))
         else:
             continue
-    points=np.array(points)
-    os.makedirs( os.path.join(outPath, 'pointcloud'),exist_ok=True)
+    points = np.array(points)
+    os.makedirs(os.path.join(outPath, 'pointcloud'), exist_ok=True)
     filename = 'pointCloud.ply'
-    output_filename = os.path.join(outPath, 'pointcloud',filename)
+    output_filename = os.path.join(outPath, 'pointcloud', filename)
     write_pointcloud(output_filename, points)
-    #calibrate scale factor
+    # calibrate scale factor
     mask_i = MASK[0]
-    MASK_i= MASK_NEWLIST[0]
+    MASK_i = MASK_NEWLIST[0]
     scale_idx = mask_i[MASK_i[0]]
     scale_calibrate_frame = scale_idx // (num_board * pattern[0] * pattern[1])
     scale_calibrate_board = (scale_idx - (num_board * pattern[0] * pattern[1]) * scale_calibrate_frame) // (
             pattern[0] * pattern[1])
     k3d = points
     print(scale_calibrate_frame, scale_calibrate_board)
-    pointData1 = read_json(os.path.join(outPath, "PointData", "Intri_undistorted", f"00",
-                                        f'image_{scale_calibrate_frame:02d}.json'))
-    pointData2 = read_json(os.path.join(outPath, "PointData", "Intri_undistorted", f"01",
-                                        f'image_{scale_calibrate_frame:02d}.json'))
+    pointData1 = pointcorner_data['00'][scale_calibrate_frame]
+    pointData2 = pointcorner_data['01'][scale_calibrate_frame]
     point3d1 = np.array(pointData1[f'keyPoints3d_{scale_calibrate_board}'], dtype=np.float32)
     point3d2 = np.array(pointData2[f'keyPoints3d_{scale_calibrate_board}'], dtype=np.float32)
     point_gt = []
@@ -805,27 +1006,30 @@ def calibExtri(outPath,num_board,num_pic,pattern):
     length = np.linalg.norm(point_pre[0, :3] - point_pre[ref_point_id, :3])
     length_gt = np.linalg.norm(point_gt[0, :3] - point_gt[ref_point_id, :3])
     scale = length_gt / length
-    print('gt diag={:.3f}, est diag={:.3f}, scale={:.3f}'.format(length_gt, length, length_gt/length))
+    print('gt diag={:.3f}, est diag={:.3f}, scale={:.3f}'.format(length_gt, length, length_gt / length))
     # points3D, Rs, Ts=bundle_adjustment(KEYPOINTS3D, Ks, R_abs, T_abs, KEYPOINTS2D_NEWLIST,MASK_NEWLIST,len(cams))
-    print(f"After BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
+    print(
+        f"After BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
 
-    camera_params=[]
-    #save results
-    for i,cam in enumerate(cams):
-        if i==0:
-            R=R_abs[0]
-            T=T_abs[0]
+    camera_params = []
+    # save results
+    for i, cam in enumerate(camIds):
+        if i == 0:
+            R = R_abs[0]
+            T = T_abs[0]
         else:
             R = R_abs[i]
             T = T_abs[i]
-        k=Ks[i]
-        d=dist[i]
+        k = Ks[i]
+        d = Dists[i]
         c2w = np.eye(4)
         c2w[:3, :3] = R
-        c2w[:3, 3] = T.squeeze()
-        c2w[:3,:]=c2w[:3,:]*scale
-        #scale normalization
-        c2w_ba=map.cameras[i].pose[:3,:]*scale
+        c2w[:3, 3] = T.squeeze()* scale
+        # c2w[:3, :] = c2w[:3, :] * scale
+        # scale normalization
+        c2w_ba= np.eye(4)
+        c2w_ba[:3, :] = map.cameras[i].pose[:3, :]
+        c2w_ba[:3,3]=c2w_ba[:3,3]*scale
         # R_ref=np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=np.float32)
         # c2w_ba1=np.matmul(R_ref,c2w_ba)
 
@@ -833,45 +1037,43 @@ def calibExtri(outPath,num_board,num_pic,pattern):
         annots['cams'][cam]['c2w_old'] = c2w
         annots['cams'][cam]['c2w_new'] = c2w_ba
 
-
         ##txt format
-        #fu, u0, v0, ar, s, k1, k2, p1, p2, k3, q0, q1, q2, q3, tx, ty, tz
-        fu=k[0][0]
-        u0=k[0][2]
-        v0=k[1][2]
-        ar=1
-        s=k[0][1]
-        k1=float(d[0])
-        k2=float(d[1])
-        k3=float(d[2])
-        k4=float(d[3])
-        q0,q1,q2,q3=rotationMatrixToQuaternion(c2w[:3,:3])
-        t1,t2,t3=c2w[:3,3].T
-        width=2448
-        height=2048
-        camera_params.append([fu,u0,v0,ar,s,k1,k2,k3,k4,q0,q1,q2,q3,t1,t2,t3,width,height])
+        # fu, u0, v0, ar, s, k1, k2, p1, p2, k3, q0, q1, q2, q3, tx, ty, tz
+        fu = k[0][0]
+        u0 = k[0][2]
+        v0 = k[1][2]
+        ar = 1
+        s = k[0][1]
+        k1 = float(d[0])
+        k2 = float(d[1])
+        k3 = float(d[2])
+        k4 = float(d[3])
+        q0, q1, q2, q3 = rotationMatrixToQuaternion(c2w[:3, :3])
+        t1, t2, t3 = c2w[:3, 3].T
+        camera_params.append([fu, u0, v0, ar, s, k1, k2, k3, k4, q0, q1, q2, q3, t1, t2, t3, width, height])
     np.save(os.path.join(outPath, 'extri_annots.npy'), annots)
 
     ##align format
-    output_file = os.path.join(outPath,"camera_params.txt")
-    saveResult_txt(output_file,camera_params)
+    output_file = os.path.join(outPath, "camera_params.txt")
+    saveResult_txt(output_file, camera_params)
+
+
+
 
 if __name__ == '__main__':
     # torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--root_path', type=str, default='../sfm1/archive/bimage_fisheye_multicharuco_360')
     parser.add_argument('--out_path', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360')
     parser.add_argument('--pattern', type=int, nargs='+', default=[4, 6])
-    parser.add_argument('--num',type=int, default=18)
+    parser.add_argument('--gridsize', type=float,default=0.197)
+    parser.add_argument('--ext', type=str,default='.png')
+    parser.add_argument('--num_pic',type=int, default=18)
+    parser.add_argument('--is_charu', default=False, action="store_true")
+    parser.add_argument('--is_fisheye', default=False, action="store_true")
     parser.add_argument('--num_board', type=int, default=6)
+    parser.add_argument('--num_cam', type=int, default=6)
     args = parser.parse_args()
+    calibIntriandExtri(args.root_path, args.out_path, args.pattern,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
 
-    calibExtri(args.out_path,args.num_board,args.num,args.pattern)
-
-
-
-# calibExtri(os.path.join('sfm1',"archive", "output_bimage_fisheye_charuco"))
-# calibExtri(os.path.join('../sfm1',"archive", "output_bimage_fisheye_multicharuco_360"),num_board=6,num_pic=18,pattern=(4,6))
-# calibExtri(os.path.join('sfm1',"archive", "bimage_fisheye_chess"), os.path.join('sfm1',"archive", "output_bimage_fisheye_chessboard"), (9,6), 0.024, ".png",is_charu=False,is_fisheye=True)
-# calibExtriusingcolmap(os.path.join('sfm1',"archive", "bimage_fisheye_chess"), os.path.join('sfm1',"archive", "output_bimage_fisheye_chessboard"), (9,6), 0.024, ".png",is_charu=False,is_fisheye=True,num_board=1)
-# calibExtri(os.path.join("Image", "ExtriImage"), "OutPut", (9,6), 1, ".jpg")

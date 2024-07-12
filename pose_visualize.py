@@ -1,10 +1,11 @@
 import json
 import numpy as np
+import pandas as pd
 # from tqdm import tqdm
 import os
 import cv2
 import gzip
-# import torch
+from FileUtils import  read_json
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -107,8 +108,70 @@ def convert_ndc_to_pinhole(focal_length, principal_point, image_size):
     cx, cy = principal_point_px[0], principal_point_px[1]
     K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
     return K
+def align_extrinsic_params(true_extrinsic, relative_extrinsic):
+    """
+    将相对外参对齐到真实外参
+
+    参数:
+    true_extrinsic (list/ndarray): 真实的相机外参数据
+    relative_extrinsic (list/ndarray): 相对的相机外参数据
+
+    返回:
+    aligned_extrinsic (list/ndarray): 对齐后的相机外参数据
+    """
+    aligned_extrinsic = []
+    cam1_transform = np.linalg.inv(relative_extrinsic[0])@true_extrinsic[0]#
+    aligned_extrinsic.append(cam1_transform)
+    # 遍历每个相机的外参
+    for i in range(1,len(true_extrinsic)):
+        # 提取真实和相对外参的变换矩阵
+        T_true = true_extrinsic[i]
+        T_relative = relative_extrinsic[i]
+
+        # 计算对齐变换矩阵
+        T_align = np.dot(cam1_transform, T_relative)
+        aligned_extrinsic.append(T_align)
+
+    return np.array(aligned_extrinsic,dtype=float)
 
 
+def calculate_rotation_error(cam1_extrinsic, cam2_extrinsic):
+    """
+    计算两组外参之间的旋转误差
+
+    参数:
+    cam1_extrinsic (list/ndarray): 第一组相机外参
+    cam2_extrinsic (list/ndarray): 第二组相机外参
+
+    返回:
+    rotation_errors (list): 每个相机之间的旋转误差
+    """
+    rotation_errors = []
+    for i in range(len(cam1_extrinsic)):
+        R1 = cam1_extrinsic[i][:3, :3]
+        R2 = cam2_extrinsic[i][:3, :3]
+
+        # 计算旋转矩阵之间的差
+        R_diff = np.dot(R1, R2.T)
+
+        # 从旋转矩阵中提取旋转角度
+        angle = np.arccos((np.trace(R_diff) - 1) / 2)
+        rotation_errors.append(angle)
+
+    return rotation_errors
+
+def calculate_distance_error(cam1_extrinsic,cam2_extrinsic):
+    distance_x = []
+    distance_y = []
+    distance_z = []
+    for i in range(len(cam1_extrinsic)):
+        T1 = cam1_extrinsic[i][:3, 3]
+        T2 = cam2_extrinsic[i][:3, 3]
+        difference = T1-T2
+        distance_x.append(difference[0])
+        distance_y.append(difference[1])
+        distance_z.append(difference[2])
+    return distance_x,distance_y,distance_z
 # def opencv_from_cameras_projection(R, T, focal, p0, image_size):
 #     R = torch.from_numpy(R)[None, :, :]
 #     T = torch.from_numpy(T)[None, :]
@@ -158,22 +221,52 @@ if __name__ == '__main__':
     dirpath = args.dirpath
     poses_old = []
     poses_ba=[]
+    pose_gt=[]
+    conversion_matrix = np.array([[-1, 0, 0, 0],
+                                  [0, 1, 0, 0],
+                                  [0, 0, -1, 0],
+                                  [0, 0, 0, 1]])
+    error_data = {
+        'Cam': [0,1, 2,3,4,5]
+    }
     frame_file_path = os.path.join(dirpath, "extri_annots.npy")
     frame_file=np.load(frame_file_path,allow_pickle=True).item()
-    # camera_names='camera_mat_'
-    # world_names='world_mat_inv_'
-    for i in range(6):
-        # world_name=world_names+str(i)
-        camera=frame_file['cams'][f'{i:02d}']
+    for i in range(len(frame_file['cams'])):
+        camera=frame_file['cams'][f'cam{i:03d}']
         camera_pose=camera['c2w_old']
         camera_ba_pose=camera['c2w_new']
         poses_old.append(camera_pose)
         poses_ba.append(camera_ba_pose)
     # 创建一个3D图形
-
+    #gt_pose
+    gt_frame_root="../sfm1/archive/bimage_fisheye_multicharuco_360"
+    for i in range (len(frame_file['cams'])):
+        gt_file_path=os.path.join(gt_frame_root,f"{i:02d}",'transforms.json')
+        gt_file=read_json(gt_file_path)
+        gt_data=gt_file['frames'][0]['transform_matrix']
+        gt_data=np.array(gt_data,dtype=float)
+        #transfrorm转换坐标系，X,Y,Z，opencv和blender坐标系不同
+        gt_R=np.dot( gt_data,conversion_matrix)
+        pose_gt.append(gt_R)
+    # align pose to real world in blender
+    aliged_pose=align_extrinsic_params(pose_gt,poses_old)
+    # combine pose_gt and pose_predicted for visualization
+    pose_gt = np.array(pose_gt)
+    combined_pose = np.concatenate((pose_gt, aliged_pose), axis=0)
+    #compute rot error and dis error
+    rot_error=calculate_rotation_error(pose_gt,aliged_pose)
+    dis_x,dis_y,dis_z=calculate_distance_error(pose_gt,aliged_pose)
+    error_data['Rot. error (degree)']=rot_error
+    error_data['Dis. x'] = dis_x
+    error_data['Dis. y'] = dis_y
+    error_data['Dis. z'] = dis_z
+    #plot error
+    df = pd.DataFrame(error_data)
+    print(df.to_markdown(index=False))
+    #plot figure
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    poses = np.array(poses_ba)
+    poses = np.array(combined_pose)
     # 计算相机位置的中心点
     center = np.mean(poses[:, :3, 3], axis=0)
 
@@ -196,6 +289,7 @@ if __name__ == '__main__':
 
         # 相机位置
         camera_pos = c2w[:3, 3]
+        #do normalization or not
         # camera_pos_normalized = camera_pos / max_distance
         camera_pos_normalized = camera_pos
         ax.scatter(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], color='r')
@@ -206,12 +300,11 @@ if __name__ == '__main__':
         # 相机坐标系中的xyz轴
         axes = c2w[:3, :3]
         ax.quiver(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], axes[0, 0], axes[1, 0],
-                  axes[2, 0], length=0.2, color='r')  # x 红色
+                  axes[2, 0], length=0.1 , color='r'  )  # x 红色
         ax.quiver(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], axes[0, 1], axes[1, 1],
-                  axes[2, 1], length=0.2, color='g')  # y 绿色，朝向相机上方
+                  axes[2, 1], length=0.1, color='g')  # y 绿色，朝向相机上方
         ax.quiver(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], axes[0, 2], axes[1, 2],
-                  axes[2, 2], length=0.2, color='b')  # z 蓝色，相机方向
-
+                  axes[2, 2], length=0.1, color='b')  # z 蓝色，相机方向
     # 设置坐标轴范围
     ax.set_xlim([-1, 1])
     ax.set_ylim([-1, 1])

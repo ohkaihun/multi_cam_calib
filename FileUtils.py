@@ -28,27 +28,37 @@ def getFileList(root, ext='.jpg'):
             dic['imageNum'] = len(dic['imageList'])
             rootFolder.append(dic)
     return rootFolder
+def getFileList_aligned(root, num_cam,num_pic,ext='.jpg'):
+    rootFolder = []
+
+    for dir in range(num_cam):
+        dic = {}
+        picext = f"cam{dir:03d}"+ext
+        dic['camId'] = f"cam{dir:03d}"
+        dic['imageList'] = [img for img in os.listdir(root) if img.endswith(picext)]
+        dic['imageNum'] = len(dic['imageList'])
+        rootFolder.append(dic)
+    return rootFolder
 
 #创建输出目录
 def makeDir(outPath, cams):
     # 使用os.makedirs，父目录不存在时，会创建父目录
+    if not os.path.lexists(os.path.join(outPath, "DrawCorner", "Intri")):
+        os.makedirs(os.path.join(outPath, "DrawCorner", "Intri"))
+    if not os.path.lexists(os.path.join(outPath, "undistorted")):
+        os.makedirs(os.path.join(outPath, "undistorted"))
+
+    if not os.path.lexists(os.path.join(outPath, "DrawCorner", 'Intri_undistorted')):
+        os.makedirs(os.path.join(outPath, "DrawCorner", 'Intri_undistorted'))
     for cam in cams:
-        # if not os.path.lexists(os.path.join(outPath, "DrawCorner", "Extri", cam)):
-        #     os.makedirs(os.path.join(outPath, "DrawCorner", "Extri", cam))
-        if not os.path.lexists(os.path.join(outPath, "DrawCorner", "Intri", cam)):
-            os.makedirs(os.path.join(outPath, "DrawCorner", "Intri", cam))
-        # if not os.path.lexists(os.path.join(outPath, "PointData", "Extri", cam)):
-        #     os.makedirs(os.path.join(outPath, "PointData", "Extri", cam))
+        # if not os.path.lexists(os.path.join(outPath, "DrawCorner", "Intri", cam)):
+        #     os.makedirs(os.path.join(outPath, "DrawCorner", "Intri", cam))
+        if not os.path.lexists(os.path.join(outPath, "DrawCorner", "Intri_backproject", cam)):
+            os.makedirs(os.path.join(outPath, "DrawCorner", "Intri_backproject", cam))
 
-        if not os.path.lexists(os.path.join(outPath, "undistorted", cam)):
-            os.makedirs(os.path.join(outPath, "undistorted", cam))
+        # if not os.path.lexists(os.path.join(outPath, "PointData",'Intri_undistorted', cam)):
+        #     os.makedirs(os.path.join(outPath, "PointData",'Intri_undistorted', cam))
 
-        if not os.path.lexists(os.path.join(outPath, "PointData",'Intri_undistorted', cam)):
-            os.makedirs(os.path.join(outPath, "PointData",'Intri_undistorted', cam))
-        if not os.path.lexists(os.path.join(outPath, "DrawCorner",'Intri_undistorted', cam)):
-            os.makedirs(os.path.join(outPath, "DrawCorner",'Intri_undistorted', cam))
-        if not os.path.lexists(os.path.join(outPath, "PointData", "Intri", cam)):
-            os.makedirs(os.path.join(outPath, "PointData", "Intri", cam))
     '''
     if not os.path.lexists(outPath):
         os.mkdir(outPath)
