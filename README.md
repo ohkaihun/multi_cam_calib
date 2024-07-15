@@ -23,11 +23,12 @@ Our repository expect the following dataset structure in the source path locatio
 ```
 <location>
 |---root_path
-    |---00
-    |   |---<image 0>
-    |   |---<image 1>
-    |   |---...
-    |---01
+    |---frame000000_cam000.png
+    |---frame000000_cam001.png
+    |---...
+    |---frame000000_cam005.png
+    |---frame000001_cam000.png
+    |---frame000001_cam001.png
     |---...
 |---out_path
 ```
