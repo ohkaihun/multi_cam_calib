@@ -18,21 +18,22 @@ conda create -n calib python=3.8
 conda activate calib
 pip install  scipy g2o-python opencv-contrib-python=4.9.0.80 matplotlib 
 ```
-## Date preparation 
+## Data preparation 
 Our repository expect the following dataset structure in the source path location :
 ```
 <location>
 |---root_path
-    |---00
-    |   |---<image 0>
-    |   |---<image 1>
-    |   |---...
-    |---01
+    |---frame000000_cam000.png
+    |---frame000000_cam001.png
+    |---...
+    |---frame000000_cam005.png
+    |---frame000001_cam000.png
+    |---frame000001_cam001.png
     |---...
 |---out_path
 ```
 ## Try to run 
-run calibration in 2 steps. 
+run calibration in 1 step. 
 - pattern: Number of squares horizontally & vertically ,[4,6]
 - gridSize: Square side length (in m)
 - ext: Data extension ,'.png'
@@ -40,11 +41,16 @@ run calibration in 2 steps.
 - is_charu: Charucoboard detection
 - is_fisheye: Fisheye cam system or pinhole cam
 - num_board: Number of boards
+- num_cam: Number of CAMERAS
 ```shell
-python CalibIntri_fisheye.py --root_path ../sfm1/archive/bimage_fisheye_multicharuco_360  --out_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360 --pattern (4,6) --gridsize 0.197 --ext .png  --num 18 --is_charu --is_fisheye  --num_board 6
-python CalibExtri_fisheye.py --root_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360 --pattern (4,6) --num_board 6 --num 18 --pattern (4,6)
+python calibrate_v2.py --root_path ../sfm1/archive/bimage_fisheye_multicharuco_360_1 --out_path ../sfm1/archive/output_bimage_fisheye_multicharuco_360_1 --pattern 4 6 --gridsize 0.1968 --ext .png --num_pic 18 --is_charu --is_fisheye --num_board 6 --num_cam 6
 ```
 then use script to visualize the results.
 ```shell
 python pose_visualize.py --dirpath /path/to/your/outpath
+```
+## BA unit test 
+run unit test 
+```shell
+python unit_test_g2o.py 
 ```
