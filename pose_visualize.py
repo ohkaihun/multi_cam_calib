@@ -245,6 +245,7 @@ if __name__ == '__main__':
         gt_file=read_json(gt_file_path)
         gt_data=gt_file['frames'][0]['transform_matrix']
         gt_data=np.array(gt_data,dtype=float)
+        gt_data[:3,3]=gt_data[:3,3]*1000#(m)->(mm)
         #transfrorm转换坐标系，X,Y,Z，opencv和blender坐标系不同
         gt_R=np.dot( gt_data,conversion_matrix)
         pose_gt.append(gt_R)
@@ -290,8 +291,8 @@ if __name__ == '__main__':
         # 相机位置
         camera_pos = c2w[:3, 3]
         #do normalization or not
-        # camera_pos_normalized = camera_pos / max_distance
-        camera_pos_normalized = camera_pos
+        camera_pos_normalized = camera_pos / max_distance
+        # camera_pos_normalized = camera_pos
         ax.scatter(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], color='r')
 
         ax.text(camera_pos_normalized[0] + 0.01, camera_pos_normalized[1] + 0.01, camera_pos_normalized[2] + 0.01,

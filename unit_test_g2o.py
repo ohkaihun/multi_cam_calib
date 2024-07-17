@@ -215,7 +215,7 @@ class Map:
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
         optimizer.optimize(1000000)
-        optimizer.save("test.g2o");
+        optimizer.save("unit_test.g2o");
 
         for idx, camera in enumerate(self.cameras):
             print("Camera ID:", self.cameras[idx].id)
@@ -256,7 +256,7 @@ R1 = np.array([
         [-4.37113882867379e-8, -4.37113882867379e-8, -1],
         [-1, 1.91068567692294e-15, 4.37113882867379e-8],
         [0, 1, -4.37113882867379e-8]])
-t1 = np.array([0.2, .0, .0])
+t1 = np.array([0.2, .0, .0])*1000
 
 # 相机2的内参
 fx2 = 1000.0
@@ -272,7 +272,7 @@ R2 = np.array([
         [0.866025388240814, -2.18556959197258e-8, -0.5],
         [-0.5, -3.78551732183041e-8, -0.866025388240814],
         [0, 1, -4.37113882867379e-8]])
-t2 = np.array([0.100000001490116, 0.173205077648163, .0])
+t2 = np.array([0.100000001490116, 0.173205077648163, .0])*1000
 
 Ks.append(K1)
 Ks.append(K2)
@@ -290,9 +290,9 @@ height2 = 720
 num_points = 1000
 points_3d = []
 while len(points_3d) < num_points:
-    X = random.uniform(-5, 5)
-    Y = random.uniform(-5, 5)
-    Z = random.uniform(-10, 10)
+    X = random.uniform(-5, 5)*1000
+    Y = random.uniform(-5, 5)*1000
+    Z = random.uniform(-10, 10)*1000
     p1 = np.dot(K1, np.dot(R1, [X, Y, Z]) + t1)
     u1 = p1[0] / p1[2]
     v1 = p1[1] / p1[2]
@@ -320,7 +320,7 @@ for P in points_3d:
 
 points_2d_cam1 = np.array(points_2d_cam1)
 points_2d_cam2 = np.array(points_2d_cam2)
-noise_std = 0.01
+noise_std = 100
 points_3d_noisy = points_3d + np.random.normal(0, noise_std, points_3d.shape)
 print(points_3d_noisy-points_3d)
 # 打印结果
@@ -336,7 +336,7 @@ for n in range(num_points):
     map.observations.append(Observation(idx3d, 1, points_2d_cam2.T[:, n]))
 
 for index in range(cam_num):
-    cam = Camera(index, Rs[index], ts[index])  # 存下该相机的参数：R,T->POSE
+    cam = Camera(index, Rs[index], ts[index],fixed=True)  # 存下该相机的参数：R,T->POSE
     map.cameras.append(cam)  # 写入map
     map.K.append(Ks[index])
 print(
@@ -349,7 +349,8 @@ points_3d_pred=[]
 for i in range(len(map.points)):
     points_3d_pred.append(np.array(map.points[i].point, dtype=np.float32))
 points_3d_pred=np.array(points_3d_pred)
-points_3d_dif=points_3d_pred-points_3d_gt
+points_3d_pred_dif=points_3d_pred-points_3d_gt
+points_3d_noisy_dif=points_3d_noisy-points_3d_gt
 
 
 poses=[]
@@ -385,8 +386,8 @@ for i in range(poses.shape[0]):
     # 相机位置
     camera_pos = c2w[:3, 3]
     # do normalization or not
-    # camera_pos_normalized = camera_pos / max_distance
-    camera_pos_normalized = camera_pos
+    camera_pos_normalized = camera_pos / max_distance
+    # camera_pos_normalized = camera_pos
     ax.scatter(camera_pos_normalized[0], camera_pos_normalized[1], camera_pos_normalized[2], color='r')
 
     ax.text(camera_pos_normalized[0] + 0.01, camera_pos_normalized[1] + 0.01, camera_pos_normalized[2] + 0.01,

@@ -329,7 +329,7 @@ class Map:
         for idx, camera in enumerate(self.cameras):
             focal_length = self.K[idx][0, 0]  #Only one parameter can be passed.
             principal_point = (self.K[idx][0, 2], self.K[idx][1, 2])
-            baseline = 0.1
+            baseline = 0
             cam = g2o.CameraParameters(focal_length, principal_point, baseline)
             cam.set_id(idx)
             optimizer.add_parameter(cam)
@@ -420,7 +420,7 @@ class Map:
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
         optimizer.optimize(1000000)
-        optimizer.save("test.g2o");
+
 
         for idx, camera in enumerate(self.cameras):
             print("Camera ID:", self.cameras[idx].id)
@@ -441,6 +441,7 @@ class Map:
             # print("point before:", self.points[idx].point)
             self.points[idx].point = np.copy(p)
             # self.points[idx].point = np.hstack((self.points[idx].point, 1)) #fixes things
+        optimizer.save("test.g2o");
 
 #初始化相机内参
 def initIntriPara(outPath, camIds):
@@ -825,7 +826,7 @@ def Unproject(points, Z, intrinsic, distortion):
         y = (points_undistorted[idx, 1] - c_y) / f_y * z
         result.append([x, y, z])
     return result
-def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_charu,is_fisheye,num_board,num_cam):
+def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_charu,is_fisheye,num_board,num_cam):
     """
     rootiPath：data root path
     outPath：data output path
@@ -967,20 +968,20 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         #save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
         Ks.append(K_distorted)         #K_distorted should be the same as K
         Dists.append(dist) #5 parameters(k1,k2,p1,p2,k3) rather than 4 parameters(k1,k2,k3,k4)
-        Rvecs.append(rvecs_distorted)  #chessboard R
-        Tvecs.append(tvecs_distorted)  #chessboard T
         Dists_perspective.append(dist_distorted)
         #save results of calibation for visualation
         annots['cams'][cam['camId']] = {
             'K': K.tolist(),#fisheye K
             'D': dist.tolist(),
             'new_K':K_distorted.tolist(),#perspective K
-            'new_dist':dist_distorted.tolist()
+            'new_dist':dist_distorted.tolist(),
+            'width':width,
+            'height':height
         }
     save_json(os.path.join(outPath, "cam_intri.json"), annots)
+    return Ks,Dists,Dists_perspective,pointcorner_data,annots
 
-
-
+def calib_initalExtri(num_pic,num_board,num_cam,pattern,outPath,Ks,Dists,Dists_perspective,pointcorner_data,annots):
     ##Extri
     KEYPOINTS2D = []
     MASK = []
@@ -1002,8 +1003,6 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         MASK.append(masks)
         Init_parameters[cam+'_board_mask']=board_masks
 
-    # Initialize map for BA
-    map = Map()
     # Rs Ts SAVE Relative pose
     # R_abs T_abs SAVE Absolute pose
     Rs = []  # 各个相机旋转矩阵,0号相机的旋转矩阵为I，平均向量为0
@@ -1012,7 +1011,7 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
     Ts.append(np.array([[0], [0], [0]], dtype=np.float32))
     R_abs = [Rs[0]]
     T_abs = [Ts[0]]
-    board_used = []
+
     #only used for round-view camera system
     for index in range(num_cam):
         i = index % num_cam  # first cam index
@@ -1036,10 +1035,6 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         for n,board_index in enumerate(common_indices):
 
             board_index=int(board_index)
-            # if board_index in board_used:
-            #     continue
-            # else:
-            #     board_used.append(board_index)
             rvec_board = pointcorner_data[f'cam{i:03d}_Rvecs'][maski_indices[n]]
             rvec_board=cv2.Rodrigues(rvec_board)[0]
             tvec_board = pointcorner_data[f'cam{i:03d}_Tvecs'][maski_indices[n]]
@@ -1121,6 +1116,31 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         # write_pointcloud(output_filename, points)
 
         keypoint3d_selected=np.array(keypoint3d_selected,dtype=float)
+
+        Init_parameters[f'cam{index:02d}' + '_keypoint3d_selected'] = keypoint3d_selected
+        Init_parameters[f'cam{index:02d}' + '_keypoint2di_selected'] = keypoint2di_selected
+        Init_parameters[f'cam{index:02d}' + '_keypoint2dj_selected'] = keypoint2dj_selected
+        Init_parameters[f'cam{index:02d}' + '_maski_p'] = maski_p
+    Init_parameters['R_abs'] = R_abs
+    Init_parameters['T_abs'] = T_abs
+    return Init_parameters
+
+def calib_Extri_BA(outPath,num_cam,Init_parameters):
+    # Initialize map for BA
+    map = Map()
+
+
+    R_abs=Init_parameters['R_abs']
+    T_abs=Init_parameters['T_abs']
+
+
+    for index in range(num_cam):
+        i = index % num_cam  # first cam index
+        j = (index + 1) % num_cam # adjacent cam index
+        maski_p =Init_parameters[f'cam{index:02d}' + '_maski_p']
+        keypoint3d_selected=Init_parameters[f'cam{index:02d}' + '_keypoint3d_selected']
+        keypoint2di_selected=Init_parameters[f'cam{index:02d}' + '_keypoint2di_selected']
+        keypoint2dj_selected=Init_parameters[f'cam{index:02d}' + '_keypoint2dj_selected']
         # feed 3dpoint and corresponding 2dpoint of camera i and j to BA map
         for n, m in enumerate(maski_p):
             idx3d = int(m)
@@ -1132,7 +1152,7 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         map.L.append(len(maski_p))
         #feed K R,T to map
         if index < 1:
-            cam = Camera(index, R_abs[0], T_abs[0], False)  # 存下该相机的参数：R,T->POSE
+            cam = Camera(index, R_abs[0], T_abs[0], True)  # 存下该相机的参数：R,T->POSE
         else:
             cam = Camera(index, R_abs[index], T_abs[index], False)  # 存下该相机的参数：R,T->POSE
         map.cameras.append(cam)  # 写入map
@@ -1152,12 +1172,9 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         else:
             continue
 
-
-
-
     # save RT pose after BA
     camera_params=[]
-    for i, cam in enumerate(camIds):
+    for i, cam in enumerate(annots['cams'].keys()):
         if i == 0:
             R = R_abs[0]
             T = T_abs[0]
@@ -1176,7 +1193,8 @@ def calibIntriandExtri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_cha
         c2w_ba[:3, :] = map.cameras[i].pose[:3, :]
         c2w_ba[:3,3]=c2w_ba[:3,3]
         annots['cams'][cam]['c2w_new'] = c2w_ba
-
+        width=annots['cams'][cam]['width']
+        height=annots['cams'][cam]['height']
         ##txt format
         # fu, u0, v0, ar, s, k1, k2, p1, p2, k3, q0, q1, q2, q3, tx, ty, tz
         fu = k[0][0]
@@ -1225,5 +1243,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_board', type=int, default=6)
     parser.add_argument('--num_cam', type=int, default=6)
     args = parser.parse_args()
-    calibIntriandExtri(args.root_path, args.out_path, args.pattern,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
-
+    Ks, Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, args.pattern,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
+    Init_parameters=calib_initalExtri(args.num_pic,args.num_board,args.num_cam,args.pattern,args.out_path,Ks,Dists,Dists_perspective,pointcorner_data,annots)
+    calib_Extri_BA(args.out_path,args.num_cam,Init_parameters)
