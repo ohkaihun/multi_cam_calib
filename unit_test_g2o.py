@@ -141,24 +141,25 @@ class Map:
             revised from https://github.com/uoip/g2opy/blob/master/python/examples/ba_demo.py
         '''
         optimizer = g2o.SparseOptimizer()
-        solver = g2o.BlockSolverSE3(g2o.LinearSolverEigenSE3()) #LinearSolverPCGSE3 LinearSolverDenseSE3
+        solver = g2o.BlockSolverSE3(g2o.LinearSolverCholmodSE3()) #LinearSolverPCGSE3 LinearSolverDenseSE3
         solver = g2o.OptimizationAlgorithmLevenberg(solver)
         optimizer.set_algorithm(solver)
-
         # inliers = dict()
         camera_vertices = {}
         #define cam parameters
         for idx, camera in enumerate(self.cameras):
-            focal_length = self.K[idx][0, 0]  #Only one parameter can be passed.
-            principal_point = (self.K[idx][0, 2], self.K[idx][1, 2])
+            focal_lengthx = self.K[idx][0, 0]  # Only one parameter can be passed.
+            focal_lengthy = self.K[idx][1, 1]
+            principal_pointx = self.K[idx][0, 2]
+            principal_pointy = self.K[idx][1, 2]
             baseline = 0.1
-            cam = g2o.CameraParameters(focal_length, principal_point, baseline)
-            cam.set_id(idx)
+            cam = g2o.CameraParameters(focal_lengthx, (principal_pointx, principal_pointy), baseline)
+            cam.set_id(idx * 2)
             optimizer.add_parameter(cam)
 
             # Use the estimated pose of the second camera based on the
             # essential matrix.
-            pose = g2o.SE3Quat(camera.R, camera.t)
+            pose = g2o.SE3Quat(np.array(camera.R, dtype=np.float64), np.array(camera.t.flatten(), dtype=np.float64))
             self.true_poses.append(pose)
             # Set the poses that should be optimized.
             # Define their initial value to be the true pose
@@ -170,31 +171,45 @@ class Map:
             v_se3.set_fixed(camera.fixed)
             optimizer.add_vertex(v_se3)
             camera_vertices[camera.id] = v_se3
+
+            #
+            # sbacam = g2o.SBACam(camera.R, camera.t)
+            # sbacam.set_cam(focal_lengthx, focal_lengthy, principal_pointx, principal_pointy, baseline)
+            #
+            # v_se3 = g2o.VertexCam()
+            # v_se3.set_id(idx * 2)  # internal id
+            # v_se3.set_estimate(sbacam)
+            # v_se3.set_fixed(camera.fixed)
+            # optimizer.add_vertex(v_se3)
+            # camera_vertices[camera.id] = v_se3
+
             # print("camera id: %d" % camera.camera_id)
         print("num cam_vertices:", len(camera_vertices))
         anchor = 0
         point_vertices = {}
-        #define 3d points
+        # define 3d points
         for point in self.points:
             # Add 3d location of point to the graph
             vp = g2o.VertexPointXYZ()
-            vp.set_id(point.id)
-            vp.set_marginalized(True)
+            # vp = g2o.VertexSBAPointXYZ()
+            vp.set_id(point.id * 2 + 1)
+            vp.set_marginalized(False)
+            vp.set_fixed(False)
             # Use positions of 3D points from the triangulation
 
             # point_temp = np.array(point.point, dtype=np.float64) #TODO: forventer 3x1, er 4x1 (scale)
-            point_temp = np.array(point.point[0:3], dtype=np.float64)
+            point_temp = np.array(point.point[0:3].flatten(), dtype=np.float64)
 
             vp.set_estimate(point_temp)
             optimizer.add_vertex(vp)
             point_vertices[point.id] = vp
         print("num point_vertices:", len(point_vertices))
         print("# observations:", len(self.observations))
-        #define observation:image plane 2d
-        for i,observation in enumerate(self.observations): # Ikke sikker på at det her er rette syntax
+        # define observation:image plane 2d
+        for i, observation in enumerate(self.observations):  # Ikke sikker på at det her er rette syntax
 
+            # edge = g2o.EdgeSE3ProjectXYZ()
             edge = g2o.EdgeProjectXYZ2UV()
-
             # 3D point
             edge.set_vertex(0, point_vertices[observation.point_id])
             # Pose of first camera
@@ -202,12 +217,11 @@ class Map:
             # edge.set_vertex(2, camera_vertices[anchor])
 
             edge.set_measurement(observation.point)
-            edge.set_information(np.identity(2))
+            edge.set_information(np.identity(2) * 0.01)
             edge.set_robust_kernel(g2o.RobustKernelHuber())
 
-            edge.set_parameter_id(0, observation.camera_id)
+            edge.set_parameter_id(0, observation.camera_id * 2)
             optimizer.add_edge(edge)
-
 
         print('num vertices:', len(optimizer.vertices()))
         print('num edges:', len(optimizer.edges()))
@@ -215,7 +229,7 @@ class Map:
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
         optimizer.optimize(1000000)
-        optimizer.save("unit_test.g2o");
+        optimizer.save("calibration.g2o");
 
         for idx, camera in enumerate(self.cameras):
             print("Camera ID:", self.cameras[idx].id)
@@ -287,7 +301,7 @@ width2 = 1280
 height2 = 720
 
 # 随机生成三维点坐标,确保在两个相机可见范围内
-num_points = 1000
+num_points = 100
 points_3d = []
 while len(points_3d) < num_points:
     X = random.uniform(-5, 5)*1000
@@ -320,23 +334,26 @@ for P in points_3d:
 
 points_2d_cam1 = np.array(points_2d_cam1)
 points_2d_cam2 = np.array(points_2d_cam2)
-noise_std = 100
+noise_std = 10
 points_3d_noisy = points_3d + np.random.normal(0, noise_std, points_3d.shape)
 print(points_3d_noisy-points_3d)
 # 打印结果
-for i, (P, p1, p2) in enumerate(zip(points_3d, points_2d_cam1, points_2d_cam2)):
-    print(f"三维点坐标: {P}")
-    print(f"相机1二维像素坐标: ({p1[0]:.2f}, {p1[1]:.2f})")
-    print(f"相机2二维像素坐标: ({p2[0]:.2f}, {p2[1]:.2f})")
+# for i, (P, p1, p2) in enumerate(zip(points_3d, points_2d_cam1, points_2d_cam2)):
+#     print(f"三维点坐标: {P}")
+#     print(f"相机1二维像素坐标: ({p1[0]:.2f}, {p1[1]:.2f})")
+#     print(f"相机2二维像素坐标: ({p2[0]:.2f}, {p2[1]:.2f})")
 
 for n in range(num_points):
-    idx3d = n
+    idx3d = n+2
     map.points.append(Point(idx3d, points_3d_noisy[n,:]))
     map.observations.append(Observation(idx3d, 0, points_2d_cam1.T[:, n]))
     map.observations.append(Observation(idx3d, 1, points_2d_cam2.T[:, n]))
 
 for index in range(cam_num):
-    cam = Camera(index, Rs[index], ts[index],fixed=True)  # 存下该相机的参数：R,T->POSE
+    if index <1:
+        cam = Camera(index, Rs[index], ts[index], fixed=True)  # 存下该相机的参数：R,T->POSE
+    else:
+        cam = Camera(index, Rs[index], ts[index],fixed=False)  # 存下该相机的参数：R,T->POSE
     map.cameras.append(cam)  # 写入map
     map.K.append(Ks[index])
 print(

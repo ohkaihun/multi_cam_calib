@@ -239,7 +239,7 @@ if __name__ == '__main__':
         poses_ba.append(camera_ba_pose)
     # 创建一个3D图形
     #gt_pose
-    gt_frame_root="../sfm1/archive/bimage_fisheye_multicharuco_360"
+    gt_frame_root="../LED/sfm1/archive/bimage_fisheye_multicharuco_360"
     for i in range (len(frame_file['cams'])):
         gt_file_path=os.path.join(gt_frame_root,f"{i:02d}",'transforms.json')
         gt_file=read_json(gt_file_path)
@@ -250,7 +250,7 @@ if __name__ == '__main__':
         gt_R=np.dot( gt_data,conversion_matrix)
         pose_gt.append(gt_R)
     # align pose to real world in blender
-    aliged_pose=align_extrinsic_params(pose_gt,poses_old)
+    aliged_pose=align_extrinsic_params(pose_gt,poses_ba)
     # combine pose_gt and pose_predicted for visualization
     pose_gt = np.array(pose_gt)
     combined_pose = np.concatenate((pose_gt, aliged_pose), axis=0)

@@ -299,9 +299,6 @@ class Map:
         sum = 0
         for obs in self.observations:
             cam = id2c[obs.camera_id]
-            # if cam.id == 0:
-            #     continue
-
             p = id2p[obs.point_id].point
             q = np.append(p, 1)
             p_cam = cam.pose @ q
@@ -311,6 +308,7 @@ class Map:
             dy = t[1] - obs.v
             err = dx ** 2 + dy ** 2
             err= math.sqrt(dx ** 2 + dy ** 2)
+
             sum += err
         return sum,sum/len(self.observations)
 
@@ -319,7 +317,7 @@ class Map:
             revised from https://github.com/uoip/g2opy/blob/master/python/examples/ba_demo.py
         '''
         optimizer = g2o.SparseOptimizer()
-        solver = g2o.BlockSolverSE3(g2o.LinearSolverEigenSE3()) #LinearSolverPCGSE3 LinearSolverDenseSE3
+        solver = g2o.BlockSolverSE3(g2o.LinearSolverCholmodSE3()) #LinearSolverPCGSE3 LinearSolverDenseSE3
         solver = g2o.OptimizationAlgorithmLevenberg(solver)
         optimizer.set_algorithm(solver)
 
@@ -327,16 +325,18 @@ class Map:
         camera_vertices = {}
         #define cam parameters
         for idx, camera in enumerate(self.cameras):
-            focal_length = self.K[idx][0, 0]  #Only one parameter can be passed.
-            principal_point = (self.K[idx][0, 2], self.K[idx][1, 2])
-            baseline = 0
-            cam = g2o.CameraParameters(focal_length, principal_point, baseline)
-            cam.set_id(idx)
+            focal_lengthx = self.K[idx][0, 0]  #Only one parameter can be passed.
+            focal_lengthy = self.K[idx][1, 1]
+            principal_pointx = self.K[idx][0, 2]
+            principal_pointy = self.K[idx][1, 2]
+            baseline = 0.1
+            cam = g2o.CameraParameters(focal_lengthx, (principal_pointx,principal_pointy), baseline)
+            cam.set_id(idx*2)
             optimizer.add_parameter(cam)
 
             # Use the estimated pose of the second camera based on the
             # essential matrix.
-            pose = g2o.SE3Quat(camera.R, camera.t)
+            pose = g2o.SE3Quat(np.array(camera.R,dtype=np.float64), np.array(camera.t.flatten(),dtype=np.float64))
             self.true_poses.append(pose)
             # Set the poses that should be optimized.
             # Define their initial value to be the true pose
@@ -348,20 +348,38 @@ class Map:
             v_se3.set_fixed(camera.fixed)
             optimizer.add_vertex(v_se3)
             camera_vertices[camera.id] = v_se3
+
+
+            #
+            # sbacam = g2o.SBACam(camera.R, camera.t)
+            # sbacam.set_cam(focal_lengthx, focal_lengthy, principal_pointx, principal_pointy, baseline)
+            #
+            # v_se3 = g2o.VertexCam()
+            # v_se3.set_id(idx * 2)  # internal id
+            # v_se3.set_estimate(sbacam)
+            # v_se3.set_fixed(camera.fixed)
+            # optimizer.add_vertex(v_se3)
+            # camera_vertices[camera.id] = v_se3
+
+
+
             # print("camera id: %d" % camera.camera_id)
         print("num cam_vertices:", len(camera_vertices))
         anchor = 0
         point_vertices = {}
         #define 3d points
         for point in self.points:
+
             # Add 3d location of point to the graph
             vp = g2o.VertexPointXYZ()
-            vp.set_id(point.id)
-            vp.set_marginalized(True)
+            # vp = g2o.VertexSBAPointXYZ()
+            vp.set_id(point.id*2+1)
+            vp.set_marginalized(False)
+            vp.set_fixed(False)
             # Use positions of 3D points from the triangulation
 
             # point_temp = np.array(point.point, dtype=np.float64) #TODO: forventer 3x1, er 4x1 (scale)
-            point_temp = np.array(point.point[0:3], dtype=np.float64)
+            point_temp = np.array(point.point[0:3].flatten(), dtype=np.float64)
 
             vp.set_estimate(point_temp)
             optimizer.add_vertex(vp)
@@ -370,14 +388,9 @@ class Map:
         print("# observations:", len(self.observations))
         #define observation:image plane 2d
         for i,observation in enumerate(self.observations): # Ikke sikker på at det her er rette syntax
-            # if i%2==1:
-            #     continue
-            # Add edge from first camera to the point
-            edge = g2o.EdgeProjectXYZ2UV()
 
-            # edge = g2o.EdgeProjectPSI2UV()
-            # edge.resize(3)
-
+            # edge = g2o.EdgeSE3ProjectXYZ()
+            edge=g2o.EdgeProjectXYZ2UV()
             # 3D point
             edge.set_vertex(0, point_vertices[observation.point_id])
             # Pose of first camera
@@ -385,33 +398,11 @@ class Map:
             # edge.set_vertex(2, camera_vertices[anchor])
 
             edge.set_measurement(observation.point)
-            edge.set_information(np.identity(2))
+            edge.set_information(np.identity(2)*0.01)
             edge.set_robust_kernel(g2o.RobustKernelHuber())
 
-            edge.set_parameter_id(0, observation.camera_id)
+            edge.set_parameter_id(0, observation.camera_id*2)
             optimizer.add_edge(edge)
-
-        # for i,observation in enumerate(self.observations): # Ikke sikker på at det her er rette syntax
-        #     if i%2==0:
-        #         continue
-        #     # Add edge from first camera to the point
-        #     edge = g2o.EdgeProjectXYZ2UV()
-        #
-        #     # edge = g2o.EdgeProjectPSI2UV()
-        #     # edge.resize(3)
-        #
-        #     # 3D point
-        #     edge.set_vertex(0, point_vertices[observation.point_id])
-        #     # Pose of first camera
-        #     edge.set_vertex(1, camera_vertices[observation.camera_id])
-        #     # edge.set_vertex(2, camera_vertices[anchor])
-        #
-        #     edge.set_measurement(observation.point)
-        #     edge.set_information(np.identity(2))
-        #     edge.set_robust_kernel(g2o.RobustKernelHuber())
-        #
-        #     edge.set_parameter_id(0, observation.camera_id)
-        #     optimizer.add_edge(edge)
 
 
         print('num vertices:', len(optimizer.vertices()))
@@ -420,7 +411,7 @@ class Map:
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
         optimizer.optimize(1000000)
-
+        optimizer.save("calibration.g2o");
 
         for idx, camera in enumerate(self.cameras):
             print("Camera ID:", self.cameras[idx].id)
@@ -441,7 +432,6 @@ class Map:
             # print("point before:", self.points[idx].point)
             self.points[idx].point = np.copy(p)
             # self.points[idx].point = np.hstack((self.points[idx].point, 1)) #fixes things
-        optimizer.save("test.g2o");
 
 #初始化相机内参
 def initIntriPara(outPath, camIds):
@@ -1152,7 +1142,7 @@ def calib_Extri_BA(outPath,num_cam,Init_parameters):
         map.L.append(len(maski_p))
         #feed K R,T to map
         if index < 1:
-            cam = Camera(index, R_abs[0], T_abs[0], True)  # 存下该相机的参数：R,T->POSE
+            cam = Camera(index, R_abs[index], T_abs[index], True)  # 存下该相机的参数：R,T->POSE
         else:
             cam = Camera(index, R_abs[index], T_abs[index], False)  # 存下该相机的参数：R,T->POSE
         map.cameras.append(cam)  # 写入map
