@@ -5,12 +5,12 @@ this is repository for calibration of multi-fisheye cam system, you can use char
 ## Cloning the Repository
 ```shell
 # SSH
-git clone git@github.com:/ohkaihun/multicam_calibration.git --recursive
+git clone git@github.com:/ohkaihun/multi_cam_calib.git --recursive
 ```
 or
 ```shell
 # HTTPS
-git clone https://github.com/ohkaihun/multicam_calibration --recursive
+git clone https://github.com/ohkaihun/multi_cam_calib --recursive
 ```
 ## Conda Environment
 ```
