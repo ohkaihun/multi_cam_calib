@@ -426,12 +426,8 @@ class Map:
 
         for idx, point in enumerate(self.points):
             p = point_vertices[point.id].estimate()
-            # It is important to copy the point estimates.
-            # Otherwise I end up with some memory issues.
-            # self.points[idx].point = p
-            # print("point before:", self.points[idx].point)
             self.points[idx].point = np.copy(p)
-            # self.points[idx].point = np.hstack((self.points[idx].point, 1)) #fixes things
+
 
 #初始化相机内参
 def initIntriPara(outPath, camIds):
@@ -829,6 +825,7 @@ def calibIntri(rootiPath,outPath, pattern, gridSize, ext, num_pic,is_charu,is_fi
     num_board:Number of boards
     num_cam:Number of cameras
     calibrate intri & extri parameters
+    unit_test: test unit or not
     """
     iFolder = getFileList_aligned(rootiPath, num_cam,num_pic,ext)
     camIds = [cam['camId'] for cam in iFolder]
@@ -1232,6 +1229,7 @@ if __name__ == '__main__':
     parser.add_argument('--is_fisheye', default=False, action="store_true")
     parser.add_argument('--num_board', type=int, default=6)
     parser.add_argument('--num_cam', type=int, default=6)
+
     args = parser.parse_args()
     Ks, Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, args.pattern,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
     Init_parameters=calib_initalExtri(args.num_pic,args.num_board,args.num_cam,args.pattern,args.out_path,Ks,Dists,Dists_perspective,pointcorner_data,annots)
