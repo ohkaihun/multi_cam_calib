@@ -16,7 +16,19 @@ git clone https://github.com/ohkaihun/multi_cam_calib --recursive
 ```
 conda create -n calib python=3.8
 conda activate calib
-pip install  scipy g2o-python opencv-contrib-python=4.9.0.80 matplotlib 
+pip install  scipy  opencv-contrib-python=4.9.0.80 matplotlib 
+```
+## Install g2opy from source
+make sure you have installed vcpkg
+```shell
+git clone https://github.com/uoip/g2opy.git
+cd g2opy
+mkdir build
+cd build
+cmake .. -DCMAKE_TOOLCHAIN_FILE=\path\to\your\vcpkg\scripts\buildsystems\vcpkg.cmake ..
+make -j8
+cd ..
+python setup.py install
 ```
 ## Data preparation 
 Our repository expect the following dataset structure in the source path location :
