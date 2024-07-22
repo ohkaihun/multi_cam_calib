@@ -21,6 +21,11 @@ pip install  scipy  opencv-contrib-python=4.9.0.80 matplotlib
 ## Install g2opy from source
 make sure you have installed vcpkg
 ```shell
+git clone https://github.com/microsoft/vcpkg
+cd vcpkg
+./bootstrap-vcpkg.sh
+```
+```shell
 git clone https://github.com/uoip/g2opy.git
 cd g2opy
 mkdir build
