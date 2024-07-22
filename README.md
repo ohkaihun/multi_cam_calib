@@ -30,7 +30,7 @@ git clone https://github.com/uoip/g2opy.git
 cd g2opy
 mkdir build
 cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=\path\to\your\vcpkg\scripts\buildsystems\vcpkg.cmake ..
+cmake .. -DCMAKE_TOOLCHAIN_FILE=\path\to\your\vcpkg\scripts\buildsystems\vcpkg.cmake 
 make -j8
 cd ..
 python setup.py install

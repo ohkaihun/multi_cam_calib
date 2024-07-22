@@ -593,13 +593,13 @@ def saveResult_txt(outPath,is_fisheye,camera_params):
             f.write("# fu u0 v0 ar s | k1 k2 p1 p2 k3 | quaternion(scalar part first) translation | width height |\n")
             for params in camera_params:
                 fu, u0, v0, ar, s, k1, k2, k3,k4,k5, q0, q1, q2, q3, tx, ty, tz, width, height = params
-                f.write(f"{fu:.6f} {u0:.6f} {v0:.6f} {ar:.6f} {s:.6f}  {k1:.6f} {k2:.6f}  {k3:.6f} {k4:.6f}{k5:.6f}{q0:.6f} {q1:.6f} {q2:.6f} {q3:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {width} {height}\n")
+                f.write(f"{fu:.6f} {u0:.6f} {v0:.6f} {ar:.6f} {s:.6f} {k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {k5:.6f} {q0:.6f} {q1:.6f} {q2:.6f} {q3:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {width} {height}\n")
     else:
         with open(outPath, "w") as f:
             f.write("# fu u0 v0 ar s | k1 k2  k3 k4| quaternion(scalar part first) translation | width height |\n")
             for params in camera_params:
                 fu, u0, v0, ar, s, k1, k2, k3,k4, q0, q1, q2, q3, tx, ty, tz, width, height = params
-                f.write(f"{fu:.6f} {u0:.6f} {v0:.6f} {ar:.6f} {s:.6f} {k1:.6f} {k2:.6f}  {k3:.6f} {k4:.6f}{q0:.6f} {q1:.6f} {q2:.6f} {q3:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {width} {height}\n")
+                f.write(f"{fu:.6f} {u0:.6f} {v0:.6f} {ar:.6f} {s:.6f} {k1:.6f} {k2:.6f} {k3:.6f} {k4:.6f} {q0:.6f} {q1:.6f} {q2:.6f} {q3:.6f} {tx:.6f} {ty:.6f} {tz:.6f} {width} {height}\n")
 
     print("Output saved to", outPath)
 def batch_triangulate(keypoints_, Pall, keypoints_pre=None, lamb=1e3):
@@ -1236,9 +1236,6 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         else:
             R = R_abs[i]
             T = T_abs[i]
-        k = Ks[i]
-        d = Dists[i].squeeze()
-
         c2w = np.eye(4)
         c2w[:3, :3] = R
         c2w[:3, 3] = T.squeeze()
@@ -1249,8 +1246,12 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         c2w_ba[:3, :] = map.cameras[i].pose[:3, :]
         c2w_ba[:3,3]=c2w_ba[:3,3]
         c2ws_ba.append(c2w_ba)
+
+
     transmatrix = np.linalg.inv(c2ws_ba[root_cam]) @ c2ws_ba[0]
     for i, cam in enumerate(annots['cams'].keys()):
+        k = Ks[i]
+        d = Dists[i].squeeze()
         c2w=c2ws[i]
         c2w_ba=transmatrix@c2ws_ba[i]
         annots['cams'][cam]['c2w_old'] = c2w
