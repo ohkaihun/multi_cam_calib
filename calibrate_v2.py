@@ -85,11 +85,15 @@ def undistort(img_path,out_path,K,D,is_fisheye,k0,dim2,dim3,scale=0.6,imshow=Fal
     if is_fisheye:
         undistorted_img =cv2.fisheye.undistortImage(img,K,D,Knew=k0)
     else:
-        undistorted_img= cv2.undistort(img, K, D, None,K)
+        newcameramtx, roi = cv2.getOptimalNewCameraMatrix(K, D, dim1, 1, dim1)
+        mapx, mapy = cv2.initUndistortRectifyMap(K, D, None, newcameramtx, dim1, 5)
+        undistorted_img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
+
+        # undistorted_img= cv2.undistort(img, K, D, None,K)
     if imshow:
         cv2.imshow("undistorted", undistorted_img)
     cv2.imwrite(out_path, undistorted_img)
-    return undistorted_img,scaled_K
+    return undistorted_img,K
 def undistort_list_of_points(point_list, in_K, in_d):
     K = np.asarray(in_K)
     d = np.asarray(in_d)
@@ -399,7 +403,7 @@ class Map:
             # edge.set_vertex(2, camera_vertices[anchor])
 
             edge.set_measurement(observation.point)
-            edge.set_information(np.identity(2)*0.01)
+            edge.set_information(np.identity(2)*1)
             edge.set_robust_kernel(g2o.RobustKernelHuber())
 
             edge.set_parameter_id(0, observation.camera_id*2)
@@ -795,6 +799,15 @@ def get_points(point1, point2, mask1, mask2):
     mask1_p = np.array(mask1_p,dtype=np.float32)
     mask2_p = np.array(mask2_p,dtype=np.float32)
     return point1_selected, point2_selected,mask1_indices,mask2_indices,mask1_p,mask2_p
+def get_order_ij(cam_saved,cam_not_saved):
+    for cam in cam_saved:
+        if cam+1  in cam_not_saved :
+            return cam,cam+1
+        elif cam-1 in cam_not_saved:
+            return cam,cam-1
+        else:
+            continue
+
 def add_3dpoints(keypoint3d_dict,Init_parameters,ide,cam_not_saved,R,T):
     for j in cam_not_saved:
         KEYPOINTS2D_i=Init_parameters[ f'cam{ide:03d}_keypoints2d']
@@ -931,22 +944,22 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
         #do intri calibration using opencv2  cv2.calibrateCamera or  cv2.fisheye.calibrate
         if not is_fisheye:
             # 采用np.stack 对矩阵进行叠加,类型必须为float32，float64不可以
-            ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(point3dList, point2dList, (width,height), None, None,flags=cv2.CALIB_FIX_K3)
-
-            pointcorner_data[cam['camId'] + '_Rvecs'] = rvecs
-            pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs
-            pointcorner_data[cam['camId']] = dataList
-            # save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
-            Ks.append(K)
-            Dists_perspective.append(dist)
-            # save results of calibation for visualation
-            annots['cams'][cam['camId']] = {
-                'K': K.tolist(),  # fisheye K
-                'D': dist.tolist(),
-                'width': width,
-                'height': height
-            }
-            continue
+            ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(point3dList, point2dList, (width,height), None, None)
+#CALIB_FIX_K3 not good
+            # pointcorner_data[cam['camId'] + '_Rvecs'] = rvecs
+            # pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs
+            # pointcorner_data[cam['camId']] = dataList
+            # # save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
+            # Ks.append(K)
+            # Dists_perspective.append(dist)
+            # # save results of calibation for visualation
+            # annots['cams'][cam['camId']] = {
+            #     'K': K.tolist(),  # fisheye K
+            #     'D': dist.tolist(),
+            #     'width': width,
+            #     'height': height
+            # }
+            # continue
 
 
         else:##need distortion
@@ -1008,9 +1021,15 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
         # after distortion ,do calibration perspective camera model
         ret, K_distorted, dist_distorted, rvecs_distorted, tvecs_distorted = cv2.calibrateCamera(point3dList_distorted, point2dList_distorted,
                                                              (width, height), None,
-                                                             None, flags=cv2.CALIB_FIX_K3,criteria=(
+                                                             None,criteria=(
                                                                cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 30,
                                                                1e-6))
+        # Rvecs_distorted_pnp,Tvecs_distorted_pnp=[],[]
+        # for rt in range(len(point2dList_distorted)):
+        #     ret,rvecs_distorted_pnp, tvecs_distorted_pnp= cv2.solvePnP(np.array(point3dList_distorted[rt],dtype=np.float32), np.array(point2dList_distorted[rt],dtype=np.float32), K_distorted, dist_distorted, None, None, False, cv2.SOLVEPNP_ITERATIVE)
+        #     Rvecs_distorted_pnp.append(rvecs_distorted_pnp)
+        #     Tvecs_distorted_pnp.append(tvecs_distorted_pnp)
+
         #save corner data used for extri calibration
         pointcorner_data[cam['camId']+'_Rvecs'] = rvecs_distorted
         pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs_distorted
@@ -1031,7 +1050,7 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
     save_json(os.path.join(outPath, "cam_intri.json"), annots)
     return Ks,Dists,Dists_perspective,pointcorner_data,annots
 
-def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,Ks,Dists_perspective,pointcorner_data,annots):
+def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root_cam,Ks,Dists_perspective,pointcorner_data,annots):
     ##Extri
     KEYPOINTS2D = []
     MASK = []
@@ -1061,18 +1080,20 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,Ks,D
     Rs.append(np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float32))
     Ts = []  # 各个相机平移
     Ts.append(np.array([[0], [0], [0]], dtype=np.float32))
-    R_abs = [Rs[0]]
-    T_abs = [Ts[0]]
+    R_abs = [Rs[0]for _ in range(num_cam)]
+    T_abs = [Ts[0]for _ in range(num_cam)]
     keypoint3d_dict={}
-    # cam_saved=[]
+    cam_saved=[]
+    cam_saved.append(root_cam)
     # longest_board_mask_index, _ = max([(i//3, len(value)) for i, (key, value) in enumerate(Init_parameters.items()) if key.endswith('_board_mask')], key=lambda x: x[1])
     # cam_saved.append(longest_board_mask_index)
     cam_not_saved= list(range(num_cam))
-    cam_not_saved.remove(0)
+    cam_not_saved.remove(root_cam)
     #only used for round-view camera system
     for index in range(num_cam-1):
-        i = index%num_cam
-        j=  (index+1)%num_cam
+        i,j=get_order_ij(cam_saved,cam_not_saved)
+        cam_not_saved.remove(j)
+        cam_saved.append(j)
         #取出相机i和相机j的坐标和mask
         KEYPOINTS2D_i = KEYPOINTS2D[i]
         KEYPOINTS2D_j = KEYPOINTS2D[j]
@@ -1115,7 +1136,10 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,Ks,D
                 else:
                     continue
         points_pro = np.array(keypoint3d_selected)
-
+        os.makedirs(os.path.join(out_path, 'pointcloud'), exist_ok=True)
+        filename = f'pointCloud_{i:02d}.ply'
+        output_filename = os.path.join(out_path,'pointcloud', filename)
+        write_pointcloud(output_filename, points_pro.squeeze()[:100,:])
         #Connect camera i and camera j through the RT matrix obtained from the same chessboard
         #Select the set of relationships with the least error
         infos=[]
@@ -1146,8 +1170,8 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,Ks,D
             T_21 = np.dot(P2, np.linalg.inv(P1))
             R = T_21[:3, :3]
             t = T_21[:3, 3]
-            R_saved = np.matmul(R, R_abs[index])
-            T_saved = T_abs[index] + np.dot(R_abs[index], t)[:, None]
+            R_saved = np.matmul(R, R_abs[i])
+            T_saved = T_abs[i] + np.dot(R_abs[i], t)[:, None]
 
             err,kpts_repro=reprojection_selection(points_pro,keypoint2dj_selected,Kj,R_saved,T_saved,Dists_perspective[j])
             infos.append({
@@ -1159,8 +1183,8 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,Ks,D
         infos.sort(key=lambda x:x['err'])
         err, r_saved, t_saved, kpts_repro = infos[0]['err'], infos[0]['R_saved'], infos[0]['T_saved'], infos[0]['repro']
         print(err)
-        R_abs.append(r_saved)
-        T_abs.append(t_saved)
+        R_abs[j]=r_saved
+        T_abs[j]=t_saved
         add_3dpoints(keypoint3d_dict,Init_parameters,i,cam_not_saved,R_abs[i],T_abs[i])
 
 
@@ -1188,9 +1212,10 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
     T_abs=Init_parameters['T_abs']
     Ks=Init_parameters['Ks']
     Dists=Init_parameters['Dists']
+    Dists_perspective=Init_parameters['Dists_perspective']
     point3d_dict=Init_parameters['Keypoints3d']
     for index in range(num_cam):
-        if index < 1:
+        if index == root_cam:
             cam = Camera(index, R_abs[index], T_abs[index], True)  # 存下该相机的参数：R,T->POSE
         else:
             cam = Camera(index, R_abs[index], T_abs[index], False)  # 存下该相机的参数：R,T->POSE
@@ -1247,8 +1272,8 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         c2w_ba[:3,3]=c2w_ba[:3,3]
         c2ws_ba.append(c2w_ba)
 
-
-    transmatrix = np.linalg.inv(c2ws_ba[root_cam]) @ c2ws_ba[0]
+    transmatrix = np.linalg.inv(c2ws_ba[2]) @ c2ws_ba[root_cam]
+    # transmatrix = np.linalg.inv(c2ws_ba[root_cam]) @ c2ws_ba[0]
     for i, cam in enumerate(annots['cams'].keys()):
         k = Ks[i]
         d = Dists[i].squeeze()
@@ -1344,13 +1369,13 @@ if __name__ == '__main__':
         pointcorner_data = pickle.load(f)
     with open(os.path.join(args.out_path, 'annots.pkl'), 'rb') as f:
         annots = pickle.load(f)
-    Init_parameters=calib_initalExtri(args.out_path,args.num_pic,args.num_board,args.num_cam,pattern,args.is_fisheye,Ks,Dists_perspective,pointcorner_data,annots)
+    Init_parameters=calib_initalExtri(args.out_path,args.num_pic,args.num_board,args.num_cam,pattern,args.is_fisheye,args.root_cam,Ks,Dists_perspective,pointcorner_data,annots)
 
     Init_parameters['Ks']=Ks
-    if args.is_fisheye:
-        Init_parameters['Dists']=Dists
-    else:
-        Init_parameters['Dists'] = Dists_perspective
-
+    # if args.is_fisheye:
+    #     Init_parameters['Dists']=Dists
+    # else:
+    Init_parameters['Dists'] = Dists
+    Init_parameters['Dists_perspective']=Dists_perspective
 
     calib_Extri_BA(args.out_path,args.num_cam,args.is_fisheye,args.root_cam,Init_parameters)

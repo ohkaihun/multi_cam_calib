@@ -142,7 +142,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
         number=0
         chCorners=None
         chIds=None
-    if number >= 8:#at least 8 corners detected
+    if number >= 16:#at least 8 corners detected
         return True, chCorners, chIds
     else:
         return False,chCorners, chIds
