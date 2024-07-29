@@ -216,7 +216,7 @@ if __name__ == '__main__':
     # poses = np.array(poses).astype(np.float32) # 100×4×4
     # poses = np.load(r"D:\lab\project\sfm\result.npy")
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dirpath', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360')
+    parser.add_argument('--dirpath', type=str, default='../sfm1/archive/output_bimage_fisheye_multicharuco_360_1')
     args = parser.parse_args()
     dirpath = args.dirpath
     poses_old = []
@@ -240,35 +240,35 @@ if __name__ == '__main__':
         poses_ba.append(camera_ba_pose)
     # 创建一个3D图形
     # #gt_pose
-    # gt_frame_root="../LED/sfm1/archive/bimage_fisheye_multicharuco_360"
-    # for i in range (len(frame_file['cams'])):
-    #     gt_file_path=os.path.join(gt_frame_root,f"{i:02d}",'transforms.json')
-    #     gt_file=read_json(gt_file_path)
-    #     gt_data=gt_file['frames'][0]['transform_matrix']
-    #     gt_data=np.array(gt_data,dtype=float)
-    #     gt_data[:3,3]=gt_data[:3,3]*1000#(m)->(mm)
-    #     #transfrorm转换坐标系，X,Y,Z，opencv和blender坐标系不同
-    #     gt_R=np.dot( gt_data,conversion_matrix)
-    #     pose_gt.append(gt_R)
-    # # align pose to real world in blender
-    # aliged_pose=align_extrinsic_params(pose_gt,poses_ba)
-    # # combine pose_gt and pose_predicted for visualization
-    # pose_gt = np.array(pose_gt)
-    # combined_pose = np.concatenate((pose_gt, aliged_pose), axis=0)
-    # #compute rot error and dis error
-    # rot_error=calculate_rotation_error(pose_gt,aliged_pose)
-    # dis_x,dis_y,dis_z=calculate_distance_error(pose_gt,aliged_pose)
-    # error_data['Rot. error (degree)']=rot_error
-    # error_data['Dis. x'] = dis_x
-    # error_data['Dis. y'] = dis_y
-    # error_data['Dis. z'] = dis_z
-    # #plot error
-    # df = pd.DataFrame(error_data)
-    # print(df.to_markdown(index=False))
+    gt_frame_root="../LED/sfm1/archive/bimage_fisheye_multicharuco_360"
+    for i in range (len(frame_file['cams'])):
+        gt_file_path=os.path.join(gt_frame_root,f"{i:02d}",'transforms.json')
+        gt_file=read_json(gt_file_path)
+        gt_data=gt_file['frames'][0]['transform_matrix']
+        gt_data=np.array(gt_data,dtype=float)
+        gt_data[:3,3]=gt_data[:3,3]*1000#(m)->(mm)
+        #transfrorm转换坐标系，X,Y,Z，opencv和blender坐标系不同
+        gt_R=np.dot( gt_data,conversion_matrix)
+        pose_gt.append(gt_R)
+    # align pose to real world in blender
+    aliged_pose=align_extrinsic_params(pose_gt,poses_ba)
+    # combine pose_gt and pose_predicted for visualization
+    pose_gt = np.array(pose_gt)
+    combined_pose = np.concatenate((pose_gt, aliged_pose), axis=0)
+    #compute rot error and dis error
+    rot_error=calculate_rotation_error(pose_gt,aliged_pose)
+    dis_x,dis_y,dis_z=calculate_distance_error(pose_gt,aliged_pose)
+    error_data['Rot. error (degree)']=rot_error
+    error_data['Dis. x'] = dis_x
+    error_data['Dis. y'] = dis_y
+    error_data['Dis. z'] = dis_z
+    #plot error
+    df = pd.DataFrame(error_data)
+    print(df.to_markdown(index=False))
     #plot figure
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    poses = np.array(poses_ba)
+    poses = np.array(combined_pose)
     # 计算相机位置的中心点
     center = np.mean(poses[:, :3, 3], axis=0)
 

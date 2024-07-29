@@ -103,7 +103,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     num_marker_total=get_total_marker(SQUARES_VERTICALLY,SQUARES_HORIZONTALLY)
     board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary, np.arange(num_marker_total)+num_marker_total*board_index)
-    board.setLegacyPattern(True)
+    # board.setLegacyPattern(True)
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(dictionary, params)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001)
@@ -142,7 +142,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
         number=0
         chCorners=None
         chIds=None
-    if number >= 16:#at least 8 corners detected
+    if number >= 8:#at least 8 corners detected
         return True, chCorners, chIds
     else:
         return False,chCorners, chIds

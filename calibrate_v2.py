@@ -390,7 +390,7 @@ class Map:
             optimizer.add_vertex(vp)
             point_vertices[point.id] = vp
         print("num point_vertices:", len(point_vertices))
-        print("# observations:", len(self.observations))
+        print("observations:", len(self.observations))
         #define observation:image plane 2d
         for i,observation in enumerate(self.observations): # Ikke sikker på at det her er rette syntax
 
@@ -403,7 +403,7 @@ class Map:
             # edge.set_vertex(2, camera_vertices[anchor])
 
             edge.set_measurement(observation.point)
-            edge.set_information(np.identity(2)*1)
+            edge.set_information(np.identity(2)*0.05)
             edge.set_robust_kernel(g2o.RobustKernelHuber())
 
             edge.set_parameter_id(0, observation.camera_id*2)
@@ -413,9 +413,10 @@ class Map:
         print('num vertices:', len(optimizer.vertices()))
         print('num edges:', len(optimizer.edges()))
         print('Performing full BA:')
+        # optimizer.init_multi_threading()
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
-        optimizer.optimize(300000)
+        optimizer.optimize(10000)
         optimizer.save("calibration.g2o");
 
         for idx, camera in enumerate(self.cameras):
@@ -799,55 +800,53 @@ def get_points(point1, point2, mask1, mask2):
     mask1_p = np.array(mask1_p,dtype=np.float32)
     mask2_p = np.array(mask2_p,dtype=np.float32)
     return point1_selected, point2_selected,mask1_indices,mask2_indices,mask1_p,mask2_p
-def get_order_ij(cam_saved,cam_not_saved):
-    for cam in cam_saved:
-        if cam+1  in cam_not_saved :
-            return cam,cam+1
-        elif cam-1 in cam_not_saved:
-            return cam,cam-1
-        else:
-            continue
+def get_order_ij(cam_saved,cam_not_saved,KEYPOINTS2D,MASK):
+    for cam_i in cam_saved:
+        for cam_j in cam_not_saved:
+            KEYPOINTS2D_i = KEYPOINTS2D[cam_i]
+            KEYPOINTS2D_j = KEYPOINTS2D[cam_j]
+            mask_i = MASK[cam_i]
+            mask_j = MASK[cam_j]
+            # 找到公视点的2维坐标  以及其公视点下标
+            keypoint2di_selected, keypoint2dj_selected, maski_selected, maskj_selected, maski_p, maskj_p = get_points(
+                KEYPOINTS2D_i, KEYPOINTS2D_j, mask_i, mask_j)
+            if len(keypoint2di_selected)==0 :
+                continue
+            else:
+                return cam_i ,cam_j,keypoint2di_selected,keypoint2dj_selected,maski_selected,maskj_selected,maski_p,maskj_p
 
-def add_3dpoints(keypoint3d_dict,Init_parameters,ide,cam_not_saved,R,T):
-    for j in cam_not_saved:
-        KEYPOINTS2D_i=Init_parameters[ f'cam{ide:03d}_keypoints2d']
-        KEYPOINTS2D_j=Init_parameters[ f'cam{j:03d}_keypoints2d']
-        mask_i=Init_parameters[ f'cam{ide:03d}_pointmask']
-        mask_j = Init_parameters[f'cam{j:03d}_pointmask']
-        keypoint2di_selected, keypoint2dj_selected, maski_selected, maskj_selected, maski_p, maskj_p = get_points(
-            KEYPOINTS2D_i, KEYPOINTS2D_j, mask_i, mask_j)
-        Ki = Ks[ide]
+def add_3dpoints(keypoint3d_dict,Init_parameters,pointcorner_data,R_abs,T_abs,Ks,cam_index):
 
-        common_indices = np.intersect1d(Init_parameters[f'cam{ide:03d}_board_mask'],
-                                        Init_parameters[f'cam{j:03d}_board_mask'])
-        # 公视棋盘板索引存在了board_selected里
-        maski_indices = [np.where(Init_parameters[f'cam{ide:03d}_board_mask'] == idx)[0][0] for idx in common_indices]
+    KEYPOINTS2D_i=Init_parameters[ f'cam{cam_index:03d}_keypoints2d']
+    mask_i=Init_parameters[ f'cam{cam_index:03d}_pointmask']
+    Ki=Ks[cam_index]
+    R=R_abs[cam_index]
+    T=T_abs[cam_index]
+    for n, board_index in enumerate(Init_parameters[ f'cam{cam_index:03d}_board_mask']):
 
-        for n, board_index in enumerate(common_indices):
+        board_index = int(board_index)
+        rvec_board = pointcorner_data[f'cam{cam_index:03d}_Rvecs'][n]
+        rvec_board = cv2.Rodrigues(rvec_board)[0]
+        tvec_board = pointcorner_data[f'cam{cam_index:03d}_Tvecs'][n]
 
-            board_index = int(board_index)
-            rvec_board = pointcorner_data[f'cam{ide:03d}_Rvecs'][maski_indices[n]]
-            rvec_board = cv2.Rodrigues(rvec_board)[0]
-            tvec_board = pointcorner_data[f'cam{ide:03d}_Tvecs'][maski_indices[n]]
-
-            for m in range(board_index * pattern[0] * pattern[1], (board_index + 1) * pattern[0] * pattern[1]):
-                if m in maski_p and m not in keypoint3d_dict:
-                    p = np.where(maski_p == m)
-                    u = float(keypoint2di_selected[p, 0])
-                    v = float(keypoint2di_selected[p, 1])
-                    # calculata s
-                    uvpoint = np.array([u, v, 1]).reshape(-1, 1)
-                    leftSideMat = np.linalg.inv(rvec_board) @ np.linalg.inv(Ki) @ uvpoint
-                    rightSideMat = np.linalg.inv(rvec_board) @ tvec_board
-                    s = (0 + rightSideMat[2, 0]) / leftSideMat[2, 0]
-                    # prejection form 2d to 3d
-                    # X is the 3d point in the chessboard coordinate system(with z=0) and Pworld is the 3d point in the camera coordinate system
-                    X = np.linalg.inv(rvec_board) @ ((s * np.linalg.inv(Ki) @ uvpoint) - tvec_board)
-                    P_world = np.dot(np.linalg.inv(R), np.dot(rvec_board, X) + tvec_board - T)
-                    keypoint3d_dict[f'{m:05d}']=P_world
-                else:
-                    continue
-    print("add points to keypoint3d_dict")
+        for m in range(board_index * pattern[0] * pattern[1], (board_index + 1) * pattern[0] * pattern[1]):
+            if m in mask_i and m not in keypoint3d_dict:
+                p = np.where(mask_i == m)
+                u = float(KEYPOINTS2D_i[p, 0])
+                v = float(KEYPOINTS2D_i[p, 1])
+                # calculata s
+                uvpoint = np.array([u, v, 1]).reshape(-1, 1)
+                leftSideMat = np.linalg.inv(rvec_board) @ np.linalg.inv(Ki) @ uvpoint
+                rightSideMat = np.linalg.inv(rvec_board) @ tvec_board
+                s = (0 + rightSideMat[2, 0]) / leftSideMat[2, 0]
+                # prejection form 2d to 3d
+                # X is the 3d point in the chessboard coordinate system(with z=0) and Pworld is the 3d point in the camera coordinate system
+                X = np.linalg.inv(rvec_board) @ ((s * np.linalg.inv(Ki) @ uvpoint) - tvec_board)
+                P_world = np.dot(np.linalg.inv(R), np.dot(rvec_board, X) + tvec_board - T)
+                keypoint3d_dict[f'{m:05d}']=P_world
+            else:
+                continue
+    print(f"add points of cam{cam_index:02d} to keypoint3d_dict")
 def Unproject(points, Z, intrinsic, distortion):
     f_x = intrinsic[0, 0]
     f_y = intrinsic[1, 1]
@@ -1090,112 +1089,70 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
     cam_not_saved= list(range(num_cam))
     cam_not_saved.remove(root_cam)
     #only used for round-view camera system
-    for index in range(num_cam-1):
-        i,j=get_order_ij(cam_saved,cam_not_saved)
-        cam_not_saved.remove(j)
-        cam_saved.append(j)
-        #取出相机i和相机j的坐标和mask
-        KEYPOINTS2D_i = KEYPOINTS2D[i]
-        KEYPOINTS2D_j = KEYPOINTS2D[j]
-        mask_i = MASK[i]
-        mask_j = MASK[j]
-
-        #找到公视点的2维坐标  以及其公视点下标
-        keypoint2di_selected, keypoint2dj_selected, maski_selected, maskj_selected,maski_p,maskj_p= get_points(KEYPOINTS2D_i, KEYPOINTS2D_j,mask_i, mask_j)
-        Ki=Ks[i]
-        Kj=Ks[j]
-        keypoint3d_selected=[]
-        #initial extri
-        common_indices = np.intersect1d(Init_parameters[f'cam{i:03d}_board_mask'], Init_parameters[f'cam{j:03d}_board_mask'])
-        #公视棋盘板索引存在了board_selected里
-        maski_indices = [np.where(Init_parameters[f'cam{i:03d}_board_mask'] == idx)[0][0] for idx in common_indices]
-
-        for n,board_index in enumerate(common_indices):
-
-            board_index=int(board_index)
-            rvec_board = pointcorner_data[f'cam{i:03d}_Rvecs'][maski_indices[n]]
-            rvec_board=cv2.Rodrigues(rvec_board)[0]
-            tvec_board = pointcorner_data[f'cam{i:03d}_Tvecs'][maski_indices[n]]
-
-            for m in range(board_index*pattern[0]*pattern[1],(board_index+1)*pattern[0]*pattern[1]):
-                if m in maski_p:
-                    p=np.where(maski_p==m)
-                    u=float(keypoint2di_selected[p,0])
-                    v=float(keypoint2di_selected[p,1])
-                    #calculata s
-                    uvpoint=np.array([u,v,1]).reshape(-1, 1)
-                    leftSideMat=np.linalg.inv(rvec_board) @ np.linalg.inv(Ki) @ uvpoint
-                    rightSideMat = np.linalg.inv(rvec_board)@ tvec_board
-                    s = (0 + rightSideMat[2, 0]) / leftSideMat[2, 0]
-                    #prejection form 2d to 3d
-                    #X is the 3d point in the chessboard coordinate system(with z=0) and Pworld is the 3d point in the camera coordinate system
-                    X=np.linalg.inv(rvec_board)  @ ((s*np.linalg.inv(Ki)@uvpoint) - tvec_board)
-                    # X=np.array([row,col,0]).reshape(-1,1)
-                    P_world = np.dot(np.linalg.inv(R_abs[i]), np.dot(rvec_board, X) + tvec_board- T_abs[i])
-                    keypoint3d_selected.append(P_world)
-                else:
-                    continue
-        points_pro = np.array(keypoint3d_selected)
-        os.makedirs(os.path.join(out_path, 'pointcloud'), exist_ok=True)
-        filename = f'pointCloud_{i:02d}.ply'
-        output_filename = os.path.join(out_path,'pointcloud', filename)
-        write_pointcloud(output_filename, points_pro.squeeze()[:100,:])
-        #Connect camera i and camera j through the RT matrix obtained from the same chessboard
-        #Select the set of relationships with the least error
+    for index in range(num_cam):
         infos=[]
-        for n, board_rt_selected in enumerate(common_indices):
-            common_index = common_indices[n]
-            # 由于pointcorner_data存RT的顺序和InitInit_parameters存板子序号的顺序一样，需要找到相机i和相机j对应的索引
-            random_index1 = np.where(Init_parameters[f'cam{i:03d}_board_mask'] == common_index)[0][0]
-            random_index2 = np.where(Init_parameters[f'cam{j:03d}_board_mask'] == common_index)[0][0]
-            # 找到相应的rvec,tvec
-            rvec1 = pointcorner_data[f'cam{i:03d}_Rvecs'][random_index1]
-            tvec1 = pointcorner_data[f'cam{i:03d}_Tvecs'][random_index1]
-            rvec2 = pointcorner_data[f'cam{j:03d}_Rvecs'][random_index2]
-            tvec2 = pointcorner_data[f'cam{j:03d}_Tvecs'][random_index2]
+        if index==0:
+            # i, j = get_order_ij(cam_saved, cam_not_saved,KEYPOINTS2D,MASK,left=True)
+            # cam_not_saved.remove(j)
+            # cam_saved.append(j)
+            pass
+        else:
+            #select the best relation
+            i, j,keypoint2di_selected,keypoint2dj_selected,maski_selected,maskj_selected,maski_p,maskj_p= get_order_ij(cam_saved, cam_not_saved,KEYPOINTS2D,MASK)
+            cam_not_saved.remove(j)
+            cam_saved.append(j)
+            points_pro = np.array([keypoint3d_dict[f'{int(idx):05d}'] for idx in maskj_p],dtype=np.float32)
+            Ki = Ks[i]
+            Kj = Ks[j]
+            common_indices = np.intersect1d(Init_parameters[f'cam{i:03d}_board_mask'],
+                                            Init_parameters[f'cam{j:03d}_board_mask'])
+            for n, board_rt_selected in enumerate(common_indices):
+                common_index = common_indices[n]
+                # 由于pointcorner_data存RT的顺序和InitInit_parameters存板子序号的顺序一样，需要找到相机i和相机j对应的索引
+                random_index1 = np.where(Init_parameters[f'cam{i:03d}_board_mask'] == common_index)[0][0]
+                random_index2 = np.where(Init_parameters[f'cam{j:03d}_board_mask'] == common_index)[0][0]
+                # 找到相应的rvec,tvec
+                rvec1 = pointcorner_data[f'cam{i:03d}_Rvecs'][random_index1]
+                tvec1 = pointcorner_data[f'cam{i:03d}_Tvecs'][random_index1]
+                rvec2 = pointcorner_data[f'cam{j:03d}_Rvecs'][random_index2]
+                tvec2 = pointcorner_data[f'cam{j:03d}_Tvecs'][random_index2]
 
-            # 计算相机1的外参矩阵
-            R1, _ = cv2.Rodrigues(rvec1)
-            t1 = tvec1.squeeze()
-            P1 = np.eye(4)
-            P1[:3, :3] = R1
-            P1[:3, 3] = t1
+                # 计算相机1的外参矩阵
+                R1, _ = cv2.Rodrigues(rvec1)
+                t1 = tvec1.squeeze()
+                P1 = np.eye(4)
+                P1[:3, :3] = R1
+                P1[:3, 3] = t1
 
-            # 计算相机2的外参矩阵
-            R2, _ = cv2.Rodrigues(rvec2)
-            t2 = tvec2.squeeze()
-            P2 = np.eye(4)
-            P2[:3, :3] = R2
-            P2[:3, 3] = t2
-            T_21 = np.dot(P2, np.linalg.inv(P1))
-            R = T_21[:3, :3]
-            t = T_21[:3, 3]
-            R_saved = np.matmul(R, R_abs[i])
-            T_saved = T_abs[i] + np.dot(R_abs[i], t)[:, None]
+                # 计算相机2的外参矩阵
+                R2, _ = cv2.Rodrigues(rvec2)
+                t2 = tvec2.squeeze()
+                P2 = np.eye(4)
+                P2[:3, :3] = R2
+                P2[:3, 3] = t2
+                T_21 = np.dot(P2, np.linalg.inv(P1))
+                R = T_21[:3, :3]
+                t = T_21[:3, 3]
+                R_saved = np.matmul(R, R_abs[i])
+                T_saved = T_abs[i] + np.dot(R_abs[i], t)[:, None]
 
-            err,kpts_repro=reprojection_selection(points_pro,keypoint2dj_selected,Kj,R_saved,T_saved,Dists_perspective[j])
-            infos.append({
-                'err': err,
-                'repro': kpts_repro,
-                'R_saved': R_saved,
-                'T_saved': T_saved
-            })
-        infos.sort(key=lambda x:x['err'])
-        err, r_saved, t_saved, kpts_repro = infos[0]['err'], infos[0]['R_saved'], infos[0]['T_saved'], infos[0]['repro']
-        print(err)
-        R_abs[j]=r_saved
-        T_abs[j]=t_saved
-        add_3dpoints(keypoint3d_dict,Init_parameters,i,cam_not_saved,R_abs[i],T_abs[i])
-
-
-
-        # Init_parameters[f'cam{index:02d}' + '_keypoint3d_selected'] = keypoint3d_selected
-        # Init_parameters[f'cam{index:02d}' + '_keypoint2di_selected'] = keypoint2di_selected
-        # Init_parameters[f'cam{index:02d}' + '_keypoint2dj_selected'] = keypoint2dj_selected
-        # Init_parameters[f'cam{index:02d}' + '_maski_p'] = maski_p
-    keypoint3d_list = list(keypoint3d_dict.items())
-
+                err,kpts_repro=reprojection_selection(points_pro,keypoint2dj_selected,Kj,R_saved,T_saved,Dists_perspective[j])
+                infos.append({
+                    'err': err,
+                    'repro': kpts_repro,
+                    'R_saved': R_saved,
+                    'T_saved': T_saved
+                })
+            infos.sort(key=lambda x:x['err'])
+            err, r_saved, t_saved, kpts_repro = infos[0]['err'], infos[0]['R_saved'], infos[0]['T_saved'], infos[0]['repro']
+            print(err)
+            R_abs[j]=r_saved
+            T_abs[j]=t_saved
+            # 取出相机i和相机j的坐标和mask
+        cam_index=cam_saved[index]
+        add_3dpoints(keypoint3d_dict,Init_parameters,pointcorner_data,R_abs,T_abs,Ks,cam_index)
     # 对列表进行排序
+    keypoint3d_list = list(keypoint3d_dict.items())
     keypoint3d_list.sort(key=lambda x: int(x[0]))
     keypoint3d_sorted = dict(keypoint3d_list)
     Init_parameters['R_abs'] = R_abs
@@ -1226,14 +1183,20 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         # feed 3dpoint and corresponding 2dpoint of camera i and j to BA map
     for key, value in point3d_dict.items():
         idx3d = int(key)
-        map.points.append(Point(idx3d, value))
+        num=0
         for index in range(num_cam):
             if idx3d in Init_parameters[f'cam{index:03d}_pointmask']:
-                index_2d=np.where(Init_parameters[f'cam{index:03d}_pointmask'] == idx3d)[0][0]
-                map.observations.append(Observation(idx3d, index,Init_parameters[f'cam{index:03d}_keypoints2d'][index_2d]))
+                num += 1
             else:
                 pass
-
+        if num>1:
+            map.points.append(Point(idx3d, value))
+            for index in range(num_cam):
+                if idx3d in Init_parameters[f'cam{index:03d}_pointmask']:
+                    index_2d = np.where(Init_parameters[f'cam{index:03d}_pointmask'] == idx3d)[0][0]
+                    map.observations.append(Observation(idx3d, index, Init_parameters[f'cam{index:03d}_keypoints2d'][index_2d]))
+        else:
+            continue
 
     print(
         f"Before BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
@@ -1272,7 +1235,7 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         c2w_ba[:3,3]=c2w_ba[:3,3]
         c2ws_ba.append(c2w_ba)
 
-    transmatrix = np.linalg.inv(c2ws_ba[2]) @ c2ws_ba[root_cam]
+    transmatrix = np.linalg.inv(c2ws_ba[0]) @ c2ws_ba[root_cam]
     # transmatrix = np.linalg.inv(c2ws_ba[root_cam]) @ c2ws_ba[0]
     for i, cam in enumerate(annots['cams'].keys()):
         k = Ks[i]
@@ -1350,15 +1313,15 @@ if __name__ == '__main__':
 
 
     pattern = (board_dict['row'], board_dict['col'])
-    # Ks, Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, board_dict,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
-    # np.savez_compressed(os.path.join(args.out_path,'internal.npz'),
-    #          Ks=Ks,
-    #          Dists=Dists,
-    #          Dists_perspective=Dists_perspective)
-    # with open(os.path.join(args.out_path,'pointcorner_data.pkl'), 'wb') as f:
-    #     pickle.dump(pointcorner_data, f)
-    # with open(os.path.join(args.out_path,'annots.pkl'), 'wb') as f:
-    #     pickle.dump(annots, f)
+    Ks, Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, board_dict,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
+    np.savez_compressed(os.path.join(args.out_path,'internal.npz'),
+             Ks=Ks,
+             Dists=Dists,
+             Dists_perspective=Dists_perspective)
+    with open(os.path.join(args.out_path,'pointcorner_data.pkl'), 'wb') as f:
+        pickle.dump(pointcorner_data, f)
+    with open(os.path.join(args.out_path,'annots.pkl'), 'wb') as f:
+        pickle.dump(annots, f)
 
     data = np.load(os.path.join(args.out_path,'internal.npz'),allow_pickle=True)
     Ks = data['Ks']
@@ -1372,9 +1335,6 @@ if __name__ == '__main__':
     Init_parameters=calib_initalExtri(args.out_path,args.num_pic,args.num_board,args.num_cam,pattern,args.is_fisheye,args.root_cam,Ks,Dists_perspective,pointcorner_data,annots)
 
     Init_parameters['Ks']=Ks
-    # if args.is_fisheye:
-    #     Init_parameters['Dists']=Dists
-    # else:
     Init_parameters['Dists'] = Dists
     Init_parameters['Dists_perspective']=Dists_perspective
 
