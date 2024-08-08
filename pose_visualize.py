@@ -240,7 +240,7 @@ if __name__ == '__main__':
         poses_ba.append(camera_ba_pose)
     # 创建一个3D图形
     # #gt_pose
-    gt_frame_root="../LED/sfm1/archive/bimage_fisheye_multicharuco_360"
+    gt_frame_root="../sfm1/archive/bimage_fisheye_multicharuco_360"
     for i in range (len(frame_file['cams'])):
         gt_file_path=os.path.join(gt_frame_root,f"{i:02d}",'transforms.json')
         gt_file=read_json(gt_file_path)

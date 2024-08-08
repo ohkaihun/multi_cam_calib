@@ -8,6 +8,8 @@ import g2o
 import struct,random
 import numpy as np
 import cv2
+from scipy.sparse import lil_matrix
+import time
 from ChessBoard import detect_chessboard
 import argparse
 import matplotlib.pyplot as plt
@@ -26,9 +28,19 @@ def reProjection(pointData,is_charu,num_board):
             pointBoard = np.array(pointData[f'keyPoints3d_{board_index}'], dtype=np.float32)[:, :2]
             transMat, __ = cv2.findHomography(pointDetect, pointBoard, cv2.RANSAC, 1.0)
             # 使用perspectiveTransform时，需要注意，二维变三维， 整形转float型
-            pointAfter = cv2.perspectiveTransform(pointDetect.reshape(1, -1, 2), transMat)
-            pointAfter=  np.squeeze(pointAfter, axis=0)
-            error+=np.sum((pointBoard-pointAfter)*(pointBoard-pointAfter))
+
+            projected = np.dot(transMat, np.hstack((pointDetect, np.ones((pointDetect.shape[0], 1)))).T).T
+
+            # 计算投影误差
+            diff_2d = projected[:, :2] / projected[:, 2:] - pointBoard
+            nm = np.linalg.norm(diff_2d)
+            if nm > 0.3:
+                print("remove board{}".format(board_index))
+                del pointData[f'mask_{board_index}']
+            # pointAfter = cv2.perspectiveTransform(pointDetect.reshape(1, -1, 2), transMat)
+            # pointAfter=  np.squeeze(pointAfter, axis=0)
+            # error = np.linalg.norm(pointBoard - pointAfter, axis=1).mean()
+            # error+=np.sum((pointBoard-pointAfter)*(pointBoard-pointAfter))
             #print(pointBoard)
             #print(pointAfter)
             #print(pointBoard-pointAfter)
@@ -61,6 +73,98 @@ def reprojection_selection(keypoint3d_selected,keypoint2dj_selected,Kj,R_saved,T
     err = np.linalg.norm(points2d_repro.squeeze() - keypoint2dj_selected, axis=1).mean()
 
     return err,kpts_repro
+
+
+def bundle_adjustment(map,Init_parameters):
+    """ 使用Bundle Adjustment优化三维点和相机位姿 """
+    def reproj_error(params, camNum, Ks, point2dList,mask2dlist):
+        """ 重投影误差函数 """
+        errors = []
+        for i in range(camNum):
+            R = params[i * 9:i * 9 + 9].reshape(3, 3)
+            t = params[camNum * 9 + i * 3:camNum * 9 + i * 3 + 3].reshape(3, 1)
+            points3d = params[camNum * 12:]
+            points3d = points3d.reshape(-1,3)
+            # 计算三维点在当前相机下的投影
+            '''
+            cv2.projectPoints(objectPoints, rvec, tvec, cameraMatrix, distCoeffs[, imagePoints[, jacobian[, aspectRatio]]]) → imagePoints, jacobian
+            objectPoints：三维物体坐标的数组，其形状为(N,1,3)，其中N是点的数目，每个点有三个坐标。
+            rvec：旋转向量，是相机坐标系到物体坐标系的旋转向量。
+            tvec：平移向量，是相机坐标系到物体坐标系的平移向量。
+            cameraMatrix：相机矩阵，是相机内参的矩阵。
+            distCoeffs：畸变系数，包含k1、k2、p1、p2、k3等系数。
+            imagePoints：输出的二维图像坐标的数组，其形状为(N,1,2)。
+            jacobian：可选的输出的导数矩阵，其形状为(N,2,6)。
+            aspectRatio：可选的纵横比参数，用于调整相机内参矩阵中的焦距。
+            返回值有两个，第一个是imagePoints是一个(N,1,2)形状的数组
+            '''
+            pointProj = cv2.projectPoints(points3d, R, t, Ks[i], None)[0]
+            error=(pointProj.squeeze() - point2dList[i].squeeze()) * mask2dlist[i]
+            # 计算重投影误差
+            errors.append(np.linalg.norm(error))
+        return np.array(errors)
+
+    def bundle_adjustment_sparsity(n_cameras, n_points, camera_indices, point_indices):
+        m = camera_indices.size * 2
+        n = n_cameras * 9 + n_points * 3
+        A = lil_matrix((m, n), dtype=int)
+
+        i = np.arange(camera_indices.size)
+        for s in range(9):
+            A[2 * i, camera_indices * 9 + s] = 1
+            A[2 * i + 1, camera_indices * 9 + s] = 1
+
+        for s in range(3):
+            A[2 * i, n_cameras * 9 + point_indices * 3 + s] = 1
+            A[2 * i + 1, n_cameras * 9 + point_indices * 3 + s] = 1
+
+        return A
+
+
+
+    camNum=len(map.cameras)
+    Rs,ts=[],[]
+    for i in range(camNum):
+        Rs.append(map.cameras[i].R)
+        ts.append(map.cameras[i].t)
+    Rs = np.array(Rs, dtype=np.float64)
+    ts = np.array(ts, dtype=np.float64)
+    points3d=np.array([map.points[i].point for i in range(len(map.points))],dtype=np.float64)
+    n_points = points3d.shape[0]
+    camera_indices,point_indices=[],[]
+
+    mask3d=np.array([map.points[i].id for i in range(len(map.points))],dtype=int)
+    mask2dlist,point2dlist=[],[]
+    for i in range(camNum):
+        mask2d=[]
+        point2d=[]
+        for j,point_idx in enumerate(mask3d):
+            if point_idx in Init_parameters[f'cam{i:03d}_pointmask']:
+                mask2d.append(np.ones(2))
+                index = np.where(Init_parameters[f'cam{i:03d}_pointmask'] == point_idx)[0][0]
+                point2d.append(Init_parameters[f'cam{i:03d}_keypoints2d'][index,:2])
+            else:
+                mask2d.append(np.zeros(2))
+                point2d.append(np.zeros(2))
+        mask2dlist.append(np.array(mask2d))
+        point2dlist.append(np.array(point2d,dtype=np.float64))
+
+
+    params = np.hstack((Rs.reshape(-1), ts.reshape(-1), points3d.reshape(-1)))
+    Ks=np.array(map.K,dtype=np.float64)
+
+    camera_indices=np.array(camera_indices)
+    point_indices=np.array(point_indices)
+    t0 = time.time()
+    # 使用scipy.optimize.least_squares优化重投影误差,第一个参数为计算残差的函数，第二个参数为自变量
+    # A = bundle_adjustment_sparsity(camNum, n_points, camera_indices, point_indices)
+    result = least_squares(reproj_error, params,verbose=2, x_scale='jac', loss='linear', ftol=1e-14, xtol=1e-12, method='trf',args=(camNum, Ks, point2dlist,mask2dlist))
+    t1 = time.time()
+    # 将优化后的向量分解为相机位姿和三维点坐标
+    Rs = result.x[:camNum * 9].reshape(camNum, 3, 3)
+    ts = result.x[camNum * 9: camNum * 12].reshape(camNum, 3, 1)
+    points3D = result.x[camNum * 12:].reshape(-1, 3)
+    return points3D, Rs.tolist(), ts.tolist()
 
 
 #得到单个相机的内参K和畸变系数D后，对数据去畸变
@@ -139,7 +243,26 @@ def get_inner_points(width,height,pts0,pts1,MASK_i):
 
 # def estimate_pose_from_chessboard(Rvecs,Tvecs,i,j):
 
+def rotation_matrix_to_rquaternion(R):
+    """
+    将旋转矩阵转换为四元数
 
+    参数:
+    R (numpy.ndarray): 3x3旋转矩阵
+
+    返回:
+    numpy.ndarray: 4元素的旋转四元数 [w, x, y, z]
+    """
+    # 计算四元数各分量
+    w = np.sqrt(1.0 + R[0, 0] + R[1, 1] + R[2, 2]) / 2.0
+    x = (R[2, 1] - R[1, 2]) / (4 * w)
+    y = (R[0, 2] - R[2, 0]) / (4 * w)
+    z = (R[1, 0] - R[0, 1]) / (4 * w)
+
+    # 构造四元数
+    q = np.array([w, x, y, z])
+
+    return q
 def quarternion_to_rotation_matrix(q):
     """
     The formula for converting from a quarternion to a rotation
@@ -213,10 +336,10 @@ class Point:
     data structure:  id: point_id from 0-2k+
                      point: 3d dimension
     """
-    def __init__(self, point_id: int, point: np.array):
+    def __init__(self, point_id: int, point: np.array,fixed:bool):
         self.id = point_id
         self.point = point
-
+        self.fixed = fixed
     @property
     def x(self) -> float:
         return self.point[0]
@@ -281,13 +404,14 @@ class Map:
         L:List of masks
         true_poses:np.array(6,4,4)
     """
-    def __init__(self):
+    def __init__(self,root_cam):
         self.points: List[Point] = []
         self.observations: List[Observation] = []
         self.cameras: List[Camera] = []
         self.K : List[Camera]=[]
         self.L:List=[]
         self.true_poses=[]
+        self.root_cam=root_cam
     def remove_camera(self, cam_id: int):
         before = len(self.observations)
         self.cameras = [cam for cam in self.cameras if cam.id != cam_id]
@@ -334,7 +458,7 @@ class Map:
             focal_lengthy = self.K[idx][1, 1]
             principal_pointx = self.K[idx][0, 2]
             principal_pointy = self.K[idx][1, 2]
-            baseline = 0.1
+            baseline = 0
             cam = g2o.CameraParameters(focal_lengthx, (principal_pointx,principal_pointy), baseline)
             cam.set_id(idx*2)
             optimizer.add_parameter(cam)
@@ -370,7 +494,6 @@ class Map:
 
             # print("camera id: %d" % camera.camera_id)
         print("num cam_vertices:", len(camera_vertices))
-        anchor = 0
         point_vertices = {}
         #define 3d points
         for point in self.points:
@@ -401,9 +524,12 @@ class Map:
             # Pose of first camera
             edge.set_vertex(1, camera_vertices[observation.camera_id])
             # edge.set_vertex(2, camera_vertices[anchor])
-
+            if observation.camera_id==self.root_cam:
+                lamda=10
+            else:
+                lamda=0.1
             edge.set_measurement(observation.point)
-            edge.set_information(np.identity(2)*0.05)
+            edge.set_information(np.identity(2)*lamda)
             edge.set_robust_kernel(g2o.RobustKernelHuber())
 
             edge.set_parameter_id(0, observation.camera_id*2)
@@ -416,7 +542,8 @@ class Map:
         # optimizer.init_multi_threading()
         optimizer.initialize_optimization()
         optimizer.set_verbose(True)
-        optimizer.optimize(10000)
+        optimizer.optimize(2)
+
         optimizer.save("calibration.g2o");
 
         for idx, camera in enumerate(self.cameras):
@@ -506,77 +633,6 @@ def triangulate(pts1, pts2, R1, t1, R2, t2, K1, K2):
     return points3D.squeeze()
 
 #光束平差
-def bundle_adjustment(points3d, Ks, Rs, ts, point2dList,masklist,num_cam_pair):  #not used
-
-
-    def get_start_end(masklist,index):
-        start,end=0,0
-        if index == 0:
-            start = 0
-            end = len(masklist[0])
-        else:
-            for k in range(index):
-                start += len(masklist[k])
-            end = start + len(masklist[index])
-        return start,end
-    """ 使用Bundle Adjustment优化三维点和相机位姿 """
-    def reproj_error(params, camNum, Ks, point2dList,masklist):
-        """ 重投影误差函数 """
-        errors = []
-        for i in range(camNum):
-            R = params[i * 9:i * 9 + 9].reshape(3, 3)
-            t = params[camNum * 9 + i * 3:camNum * 9 + i * 3 + 3].reshape(3, 1)
-            if i==0:
-                start1,end1=get_start_end(masklist,i)
-                points3d1 = params[camNum * 12 + start1 * 3:camNum * 12 + end1 * 3]
-                points3d2 = []
-                points2d=point2dList[i]
-            elif i==5:
-                j=i-1
-                start2,end2=get_start_end(masklist,j)
-                points3d1 = []
-                points3d2 = params[camNum * 12+start2*3:camNum * 12+end2*3]
-                points2d=point2dList[2*i-1]
-            else:
-                j=i-1
-                start1,end1=get_start_end(masklist,j)
-                start2,end2=get_start_end(masklist,i)
-                points3d1 = params[camNum * 12+start1*3:camNum * 12+end1*3]
-                points3d2 = params[camNum * 12+start2*3:camNum * 12+end2*3]
-                points2d = np.concatenate([point2dList[2*i-1], point2dList[2*i]])
-            points3d= np.concatenate([points3d1,points3d2])
-            points3d = points3d.reshape(-1,3)
-            # 计算三维点在当前相机下的投影
-            '''
-            cv2.projectPoints(objectPoints, rvec, tvec, cameraMatrix, distCoeffs[, imagePoints[, jacobian[, aspectRatio]]]) → imagePoints, jacobian
-            objectPoints：三维物体坐标的数组，其形状为(N,1,3)，其中N是点的数目，每个点有三个坐标。
-            rvec：旋转向量，是相机坐标系到物体坐标系的旋转向量。
-            tvec：平移向量，是相机坐标系到物体坐标系的平移向量。
-            cameraMatrix：相机矩阵，是相机内参的矩阵。
-            distCoeffs：畸变系数，包含k1、k2、p1、p2、k3等系数。
-            imagePoints：输出的二维图像坐标的数组，其形状为(N,1,2)。
-            jacobian：可选的输出的导数矩阵，其形状为(N,2,6)。
-            aspectRatio：可选的纵横比参数，用于调整相机内参矩阵中的焦距。
-            返回值有两个，第一个是imagePoints是一个(N,1,2)形状的数组
-            '''
-            pointProj = cv2.projectPoints(points3d, R, t, Ks[i], None)[0]
-            # 计算重投影误差
-            errors.append(np.linalg.norm(pointProj.squeeze() - points2d.squeeze())) #squeeze去掉维度为1的维度
-        return np.array(errors)
-
-    camNum = len(Rs)
-    # 将相机姿态和三维点坐标向量拼接
-    Rs = np.array(Rs, dtype=np.float32)
-    ts = np.array(ts, dtype=np.float32)
-    points3d = np.concatenate([np.array(point).reshape(-1) for point in points3d])
-    params = np.hstack((Rs.reshape(-1), ts.reshape(-1), points3d.reshape(-1)))
-    # 使用scipy.optimize.least_squares优化重投影误差,第一个参数为计算残差的函数，第二个参数为自变量
-    result = least_squares(reproj_error, params, args=(camNum, Ks, point2dList,masklist))
-    # 将优化后的向量分解为相机位姿和三维点坐标
-    Rs = result.x[:camNum * 9].reshape(camNum, 3, 3)
-    ts = result.x[camNum * 9: camNum * 12].reshape(camNum, 3, 1)
-    points3D = result.x[camNum * 12:].reshape(-1, 3)
-    return points3D, Rs, ts
 
 # 保存标定结果
 def saveResult(outPath, Rs, Ts,cams):
@@ -844,6 +900,7 @@ def add_3dpoints(keypoint3d_dict,Init_parameters,pointcorner_data,R_abs,T_abs,Ks
                 X = np.linalg.inv(rvec_board) @ ((s * np.linalg.inv(Ki) @ uvpoint) - tvec_board)
                 P_world = np.dot(np.linalg.inv(R), np.dot(rvec_board, X) + tvec_board - T)
                 keypoint3d_dict[f'{m:05d}']=P_world
+
             else:
                 continue
     print(f"add points of cam{cam_index:02d} to keypoint3d_dict")
@@ -901,9 +958,9 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
         for imgName in cam['imageList']:
             detect_flag,pointData=detect_chessboard(os.path.join(rootiPath, imgName), outPath, "Intri", board_dict, gridSize, ext,is_charu,is_fisheye,num_board,None,None)
             if detect_flag==True:
+                # reProjErr = float(reProjection(pointData,is_charu,num_board))
                 pointData['valid'] = True
-                reProjErr = float(reProjection(pointData,is_charu,num_board))
-                pointData['reProjErr'] = reProjErr
+                # pointData['reProjErr'] = reProjErr
                 valid_num+=1
                 dataList.append(pointData)
             else:
@@ -943,22 +1000,22 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
         #do intri calibration using opencv2  cv2.calibrateCamera or  cv2.fisheye.calibrate
         if not is_fisheye:
             # 采用np.stack 对矩阵进行叠加,类型必须为float32，float64不可以
-            ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(point3dList, point2dList, (width,height), None, None)
+            ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(point3dList, point2dList, (width,height), None, None,criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 30, 1e-6))
 #CALIB_FIX_K3 not good
-            # pointcorner_data[cam['camId'] + '_Rvecs'] = rvecs
-            # pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs
-            # pointcorner_data[cam['camId']] = dataList
-            # # save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
-            # Ks.append(K)
-            # Dists_perspective.append(dist)
-            # # save results of calibation for visualation
-            # annots['cams'][cam['camId']] = {
-            #     'K': K.tolist(),  # fisheye K
-            #     'D': dist.tolist(),
-            #     'width': width,
-            #     'height': height
-            # }
-            # continue
+            pointcorner_data[cam['camId'] + '_Rvecs'] = rvecs
+            pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs
+            pointcorner_data[cam['camId']] = dataList
+            # save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
+            Ks.append(K)
+            Dists_perspective.append(dist)
+            # save results of calibation for visualation
+            annots['cams'][cam['camId']] = {
+                'K': K.tolist(),  # fisheye K
+                'D': dist.tolist(),
+                'width': width,
+                'height': height
+            }
+            continue
 
 
         else:##need distortion
@@ -980,10 +1037,10 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
                                                        num_board,old_k,dist)
             # Undistort an image using the calibrated fisheye intrinsic parameters and distortion coefficients
             if detect_flag == True:
+                # reProjErr = float(reProjection(pointData,is_charu,num_board))
                 pointData['valid'] = True
-                reProjErr = float(reProjection(pointData, is_charu, num_board))
-                pointData['reProjErr'] = reProjErr
                 valid_num_undistorted += 1
+                # pointData['reProjErr'] = reProjErr
                 undistorted_dataList.append(pointData)
             else:
                 pointData['valid'] = False
@@ -1016,11 +1073,12 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
                 pass
         width = dataList[0]['iWidth']
         height = dataList[0]['iHeight']
+        flags=cv2.CALIB_FIX_K3 if is_fisheye else None
         # do intri calibration using opencv2  cv2.calibrateCamera or  cv2.fisheye.calibrate
         # after distortion ,do calibration perspective camera model
         ret, K_distorted, dist_distorted, rvecs_distorted, tvecs_distorted = cv2.calibrateCamera(point3dList_distorted, point2dList_distorted,
                                                              (width, height), None,
-                                                             None,criteria=(
+                                                             None,flags=flags,criteria=(
                                                                cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_COUNT, 30,
                                                                1e-6))
         # Rvecs_distorted_pnp,Tvecs_distorted_pnp=[],[]
@@ -1034,7 +1092,7 @@ def calibIntri(rootiPath,outPath, board_dict, gridSize, ext, num_pic,is_charu,is
         pointcorner_data[cam['camId'] + '_Tvecs'] = tvecs_distorted
         pointcorner_data[cam['camId']] = undistorted_dataList
         #save intri K and D and RT(chessboard),this is used for inital CAMERA relative RT calibraion
-        Ks.append(K_distorted)         #K_distorted should be the same as K
+        Ks.append(K_distorted)
         Dists.append(dist) #5 parameters(k1,k2,p1,p2,k3) rather than 4 parameters(k1,k2,k3,k4)
         Dists_perspective.append(dist_distorted)
         #save results of calibation for visualation
@@ -1092,9 +1150,6 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
     for index in range(num_cam):
         infos=[]
         if index==0:
-            # i, j = get_order_ij(cam_saved, cam_not_saved,KEYPOINTS2D,MASK,left=True)
-            # cam_not_saved.remove(j)
-            # cam_saved.append(j)
             pass
         else:
             #select the best relation
@@ -1136,15 +1191,27 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
                 R_saved = np.matmul(R, R_abs[i])
                 T_saved = T_abs[i] + np.dot(R_abs[i], t)[:, None]
 
+                z_axis1 = R1[:, 2]
+                z_axis2 = R2[:, 2]
+                # 计算夹角
+                angle = np.arccos(np.dot(z_axis1, [0, 0, -1]))
+                # distance=np.linalg.norm(tvec1)
+                # matice=angle*distance
+
+
+
+                norm = np.linalg.norm(rvec2)+np.linalg.norm(rvec1)
                 err,kpts_repro=reprojection_selection(points_pro,keypoint2dj_selected,Kj,R_saved,T_saved,Dists_perspective[j])
                 infos.append({
                     'err': err,
                     'repro': kpts_repro,
                     'R_saved': R_saved,
-                    'T_saved': T_saved
+                    'T_saved': T_saved,
+                    'angle':angle
                 })
-            infos.sort(key=lambda x:x['err'])
-            err, r_saved, t_saved, kpts_repro = infos[0]['err'], infos[0]['R_saved'], infos[0]['T_saved'], infos[0]['repro']
+            infos.sort(key=lambda x:x['angle'])
+            err, r_saved, t_saved, kpts_repro,angle= infos[0]['err'], infos[0]['R_saved'], infos[0]['T_saved'], infos[0]['repro'],infos[0]['angle']
+
             print(err)
             R_abs[j]=r_saved
             T_abs[j]=t_saved
@@ -1162,7 +1229,7 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
 
 def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
     # Initialize map for BA
-    map = Map()
+    map = Map(root_cam)
 
 
     R_abs=Init_parameters['R_abs']
@@ -1184,13 +1251,19 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
     for key, value in point3d_dict.items():
         idx3d = int(key)
         num=0
+        flag_fixed=False
         for index in range(num_cam):
             if idx3d in Init_parameters[f'cam{index:03d}_pointmask']:
                 num += 1
+                if index==root_cam:
+                    flag_fixed=True
+                else:
+                    pass
             else:
                 pass
         if num>1:
-            map.points.append(Point(idx3d, value))
+            map.points.append(Point(idx3d, value,flag_fixed))
+
             for index in range(num_cam):
                 if idx3d in Init_parameters[f'cam{index:03d}_pointmask']:
                     index_2d = np.where(Init_parameters[f'cam{index:03d}_pointmask'] == idx3d)[0][0]
@@ -1202,12 +1275,13 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         f"Before BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
     # Do bundle_adjustment
     map.bundle_adjustment()
+    # point3ds,R_abs,T_abs=bundle_adjustment(map,Init_parameters)
     print(
         f"After BA reprojection error: {map.reproj_err()[0]:.2f}, reprojection error per observation :{map.reproj_err()[1]:.2f}")
     # save 3d points after BA
     points = []
     for i in range(len(map.points)):
-        if map.points[i].id < 10000:
+        if map.points[i].id < 50000:
             points.append(np.array(map.points[i].point, dtype=np.float32))
         else:
             continue
@@ -1229,17 +1303,20 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         c2w[:3, 3] = T.squeeze()
         c2ws.append(c2w)
 
-
+        # c2w_ba = np.eye(4)
+        # c2w_ba[:3, :3] = R
+        # c2w_ba[:3, 3] = T.squeeze()
+        # c2ws_ba.append(c2w_ba)
         c2w_ba= np.eye(4)
         c2w_ba[:3, :] = map.cameras[i].pose[:3, :]
-        c2w_ba[:3,3]=c2w_ba[:3,3]
         c2ws_ba.append(c2w_ba)
 
-    transmatrix = np.linalg.inv(c2ws_ba[0]) @ c2ws_ba[root_cam]
+
+    transmatrix = np.linalg.inv(c2ws_ba[2]) @ c2ws_ba[root_cam]
     # transmatrix = np.linalg.inv(c2ws_ba[root_cam]) @ c2ws_ba[0]
     for i, cam in enumerate(annots['cams'].keys()):
         k = Ks[i]
-        d = Dists[i].squeeze()
+        d = Dists_perspective[i].squeeze()
         c2w=c2ws[i]
         c2w_ba=transmatrix@c2ws_ba[i]
         annots['cams'][cam]['c2w_old'] = c2w
@@ -1251,7 +1328,7 @@ def calib_Extri_BA(outPath,num_cam,is_fisheye,root_cam,Init_parameters):
         fu = k[0][0]
         u0 = k[0][2]
         v0 = k[1][2]
-        ar = 1
+        ar = fu/k[1][1]
         s = k[0][1]
         q0, q1, q2, q3 = rotationMatrixToQuaternion(c2w_ba[:3, :3])
         t1, t2, t3 = c2w_ba[:3, 3].T
@@ -1313,15 +1390,15 @@ if __name__ == '__main__':
 
 
     pattern = (board_dict['row'], board_dict['col'])
-    Ks, Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, board_dict,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
-    np.savez_compressed(os.path.join(args.out_path,'internal.npz'),
-             Ks=Ks,
-             Dists=Dists,
-             Dists_perspective=Dists_perspective)
-    with open(os.path.join(args.out_path,'pointcorner_data.pkl'), 'wb') as f:
-        pickle.dump(pointcorner_data, f)
-    with open(os.path.join(args.out_path,'annots.pkl'), 'wb') as f:
-        pickle.dump(annots, f)
+    Ks,Dists, Dists_perspective,pointcorner_data,annots= calibIntri(args.root_path, args.out_path, board_dict,args.gridsize,args.ext,args.num_pic,args.is_charu,args.is_fisheye,args.num_board,args.num_cam)
+    # np.savez_compressed(os.path.join(args.out_path,'internal.npz'),
+    #         Ks=Ks,
+    #         Dists=Dists,
+    #         Dists_perspective=Dists_perspective)
+    # with open(os.path.join(args.out_path,'pointcorner_data.pkl'), 'wb') as f:
+    #     pickle.dump(pointcorner_data, f)
+    # with open(os.path.join(args.out_path,'annots.pkl'), 'wb') as f:
+    #     pickle.dump(annots, f)
 
     data = np.load(os.path.join(args.out_path,'internal.npz'),allow_pickle=True)
     Ks = data['Ks']
@@ -1332,8 +1409,9 @@ if __name__ == '__main__':
         pointcorner_data = pickle.load(f)
     with open(os.path.join(args.out_path, 'annots.pkl'), 'rb') as f:
         annots = pickle.load(f)
-    Init_parameters=calib_initalExtri(args.out_path,args.num_pic,args.num_board,args.num_cam,pattern,args.is_fisheye,args.root_cam,Ks,Dists_perspective,pointcorner_data,annots)
 
+    Init_parameters = calib_initalExtri(args.out_path, args.num_pic, args.num_board, args.num_cam, pattern,
+                                            args.is_fisheye, args.root_cam, Ks, Dists_perspective, pointcorner_data, annots)
     Init_parameters['Ks']=Ks
     Init_parameters['Dists'] = Dists
     Init_parameters['Dists_perspective']=Dists_perspective

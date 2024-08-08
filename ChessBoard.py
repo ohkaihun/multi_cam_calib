@@ -103,7 +103,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     num_marker_total=get_total_marker(SQUARES_VERTICALLY,SQUARES_HORIZONTALLY)
     board = cv2.aruco.CharucoBoard((SQUARES_VERTICALLY, SQUARES_HORIZONTALLY), SQUARE_LENGTH, MARKER_LENGTH, dictionary, np.arange(num_marker_total)+num_marker_total*board_index)
-    # board.setLegacyPattern(True)
+    board.setLegacyPattern(True)
     params = cv2.aruco.DetectorParameters()
     detector = cv2.aruco.ArucoDetector(dictionary, params)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001)
@@ -142,7 +142,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
         number=0
         chCorners=None
         chIds=None
-    if number >= 8:#at least 8 corners detected
+    if number >= 9:#at least 8 corners detected
         return True, chCorners, chIds
     else:
         return False,chCorners, chIds
@@ -178,6 +178,7 @@ def distortBackPoints(x, y, cameraMatrix, dist):
     yDistort = yDistort * fy + cy;
 
     return xDistort, yDistort
+
 def findChessboardCorners(img, pointData, board_dict,is_charu,is_fisheye,num_board,type,old_k,dist):
     '''
     pointData:        template = {
@@ -226,7 +227,6 @@ def findChessboardCorners(img, pointData, board_dict,is_charu,is_fisheye,num_boa
                 num_board_detected+=1
                 num_corners_total=get_total_corner(pattern)
                 # Label each corner point on the board
-                show = cv2.aruco.drawDetectedCornersCharuco(show, corners, chids+num_corners_total*board_index)
                 new_points3d = [0] * corners.shape[0]
                 mask=[]
                 for i in range(chids.shape[0]):
@@ -252,9 +252,27 @@ def findChessboardCorners(img, pointData, board_dict,is_charu,is_fisheye,num_boa
                 #     newcorner = cv2.undistortPoints(corners, old_k, dist)
                 #     pointData[f'keyPoints2d_{board_index}'] = newcorner.tolist()
                 else:
-                    corners = corners.squeeze()
-                    corners = np.hstack((corners, np.ones((corners.shape[0], 1))))[:, :2]
-                    pointData[f'keyPoints2d_{board_index}'] = corners.tolist()
+                    new_corners = corners.squeeze()
+                    new_corners = np.hstack((new_corners, np.ones((new_corners.shape[0], 1))))[:, :2]
+                    pointData[f'keyPoints2d_{board_index}'] = new_corners.tolist()
+
+                pointDetect = np.array(pointData[f'keyPoints2d_{board_index}'], dtype=np.float32)
+                pointBoard = np.array(pointData[f'keyPoints3d_{board_index}'], dtype=np.float32)[:, :2]
+                transMat, __ = cv2.findHomography(pointDetect, pointBoard, cv2.RANSAC, 1.0)
+                # 使用perspectiveTransform时，需要注意，二维变三维， 整形转float型
+
+                projected = np.dot(transMat, np.hstack((pointDetect, np.ones((pointDetect.shape[0], 1)))).T).T
+
+                # 计算投影误差
+                diff_2d = projected[:, :2] / projected[:, 2:] - pointBoard
+                nm = np.linalg.norm(diff_2d)
+                pointData['reProjErr'] = nm
+                if nm > 0.3:
+                    print("remove board{}".format(board_index))
+                    del pointData[f'mask_{board_index}']
+                    continue
+                else:
+                    show = cv2.aruco.drawDetectedCornersCharuco(show, corners, chids+num_corners_total*board_index)
         pointData['num_board_detected'] = num_board_detected
         if num_board_detected ==0:
             return None
@@ -292,5 +310,6 @@ def detect_chessboard(imgPath, outPath, type, board_dict, gridSize, ext,is_charu
         return False,pointData
     else:
         # save_json(os.path.join(outPath, "PointData", type,  os.sep.join(imgPath.split(os.sep)[-2:]).replace(ext, ".json")), pointData) # save pointdata
+        print(os.path.join(outPath, "DrawCorner", type, os.sep.join(imgPath.split(os.sep)[-1:])))
         cv2.imwrite(os.path.join(outPath, "DrawCorner", type, os.sep.join(imgPath.split(os.sep)[-1:])), show)  #save pic
         return True,pointData
