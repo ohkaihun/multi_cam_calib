@@ -120,9 +120,9 @@ def calulate_point_intersection(ray_airs,offset,R):
 
 ni=1
 nr=1.33
-root1Path=r"C:\Users\Mayn\work\calibration\LED\blender\results\1200_dome"
-root2Path=r"C:\Users\Mayn\work\calibration\LED\blender\results\1200_wo_dome"
-imgName=r'image_05.png'
+root1Path=r"C:\Users\Mayn\work\calibration\LED\blender\results\1200_dome_cube"
+root2Path=r"C:\Users\Mayn\work\calibration\LED\blender\results\1200_wo_dome_cube"
+imgName=r'image_08.png'
 outPath=r"C:\Users\Mayn\work\calibration\LED\blender\results"
 board_dict = {
     'dict': 'cv2.aruco.DICT_4X4_250',
@@ -135,7 +135,7 @@ ext='.png'
 num_board=8
 K=np.array([[400,0,600],[0,400,600],[0,0,1]])
 d=1#1m
-offset=np.array([[-0.15,-0.05,0]]).reshape(3,1)
+offset=np.array([[-0.5,-0.3, -0.1]]).reshape(3,1)
 # # 计算变换矩阵 H
 # H = np.array([[d, 0, 0, offset[0]],
 #               [0, d, 0, offset[1]],
@@ -145,10 +145,14 @@ offset=np.array([[-0.15,-0.05,0]]).reshape(3,1)
 # # 计算 D 矩阵
 # D = np.linalg.inv(H).T @ np.diag([1, 1, 1, -1])@np.linalg.inv(H)
 # # 定义目标函数
+#R是c2w,旋转矩阵的第一列到第三列分别表示了相机坐标系的X, Y, Z轴在世界坐标系下对应的方向；平移向量表示的是相机原点在世界坐标系的对应位置。T是W2C相应的旋转向量
 R = [[1,0,0],[0,-1,0],[0,0,-1]]
-T = [[0.15,-0.05,0]]
+C = [[-0.5,-0.3, -0.1]]
+R=np.array(R,dtype=np.float64).reshape((3,3))
+C=np.array(C,dtype=np.float64).reshape((3,1))
+T=- R@C
 dist=np.zeros((5,1))
-T=np.array(T,dtype=np.float64).reshape((3,1))
+
 
 
 
@@ -170,7 +174,7 @@ refraction_vectors=calulate_refraction_Ray(ray_airs,normal_vectors,ni,nr)
 detect_flag,pointData=detect_chessboard(os.path.join(root2Path, imgName), outPath, "Intri", board_dict, gridSize, ext,True,False,num_board,None,None)
 k3d=np.array(pointData['keyPoints3d_1'])
 k2d=np.array(pointData['keyPoints2d_1'])
-
+#r,t W2C
 ret, rvec, tvec = cv2.solvePnP(k3d, k2d, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
 rvec_board = cv2.Rodrigues(rvec)[0]
 tvec_board = tvec
@@ -186,7 +190,7 @@ for p in range(board_dict['col']*board_dict['row']):
     # prejection form 2d to 3d
     # X is the 3d point in the chessboard coordinate system(with z=0) and Pworld is the 3d point in the camera coordinate system
     X = np.linalg.inv(rvec_board) @ ((s * np.linalg.inv(K) @ uvpoint) - tvec_board)
-    P_world = np.dot(np.linalg.inv(R), np.dot(rvec_board, X) + tvec_board - T)
+    P_world = np.dot(R, np.dot(rvec_board, X) + tvec_board -T)
     points_board.append(P_world)
 points_board=np.array(points_board)
 
@@ -204,13 +208,13 @@ for i in range(points_glass.shape[0]):
 for i in range(points_board.shape[0]):
     ax.text(points_board[i,0,0], points_board[i,1,0], points_board[i,2,0], f'b_{i+1:02d}', color='k', size=10, zorder=1)
     ax.scatter(points_board[i,0,0], points_board[i,1,0], points_board[i,2,0], s=50, c='r')
-# for i in range(points_glass.shape[0]):
-#     # 计算射线的终点坐标
-#     x_end = points_glass[i,0,0] + 2 * refraction_vectors[i][0,0]
-#     y_end = points_glass[i,1,0] + 2 * refraction_vectors[i][1,0]
-#     z_end = points_glass[i,2,0] + 2 * refraction_vectors[i][2,0]
-#     # 绘制射线
-#     ax.plot([points_glass[i,0,0], x_end], [points_glass[i,1,0], y_end],[points_glass[i,2,0],z_end] ,color='blue')
+for i in range(points_glass.shape[0]):
+    # 计算射线的终点坐标
+    x_end = points_glass[i,0,0] + 2 * refraction_vectors[i][0,0]
+    y_end = points_glass[i,1,0] + 2 * refraction_vectors[i][1,0]
+    z_end = points_glass[i,2,0] + 2 * refraction_vectors[i][2,0]
+    # 绘制射线
+    ax.plot([points_glass[i,0,0], x_end], [points_glass[i,1,0], y_end],[points_glass[i,2,0],z_end] ,color='blue')
 
 # 绘制更精细的半球面
 u = np.linspace(0, 2 * np.pi, 100)
