@@ -109,7 +109,7 @@ def _findCharucoboardCorners(img,board_index,board_dict):
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001)
     #detect markers
     marker_corners, marker_ids, rejectedCandidates = detector.detectMarkers(img)
-    distCoeffsInit = np.zeros((4, 1))
+    distCoeffsInit = np.zeros((5, 1))
     # cameraMatrixInit = np.array([[500., 0., 600],
     #                              [0., 500., 600],
     #                              [0., 0., 1.]])

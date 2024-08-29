@@ -134,6 +134,7 @@ gridSize=0.1968
 ext='.png'
 num_board=8
 K=np.array([[400,0,600],[0,400,600],[0,0,1]])
+#To optimize d and offset
 d=1#1m
 offset=np.array([[-0.5,-0.3, -0.1]]).reshape(3,1)
 # # 计算变换矩阵 H

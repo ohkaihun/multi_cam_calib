@@ -193,7 +193,7 @@ def undistort(img_path,out_path,K,D,is_fisheye,k0,dim2,dim3,scale=0.6,imshow=Fal
         mapx, mapy = cv2.initUndistortRectifyMap(K, D, None, newcameramtx, dim1, 5)
         undistorted_img = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
 
-        # undistorted_img= cv2.undistort(img, K, D, None,K)
+    # undistorted_img= cv2.undistort(img, K, D, None,K)
     if imshow:
         cv2.imshow("undistorted", undistorted_img)
     cv2.imwrite(out_path, undistorted_img)
@@ -1166,7 +1166,7 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
                 # 由于pointcorner_data存RT的顺序和InitInit_parameters存板子序号的顺序一样，需要找到相机i和相机j对应的索引
                 random_index1 = np.where(Init_parameters[f'cam{i:03d}_board_mask'] == common_index)[0][0]
                 random_index2 = np.where(Init_parameters[f'cam{j:03d}_board_mask'] == common_index)[0][0]
-                # 找到相应的rvec,tvec
+                # 找到相应的rvec,tvec是W2C  P2 =w2c@c2w
                 rvec1 = pointcorner_data[f'cam{i:03d}_Rvecs'][random_index1]
                 tvec1 = pointcorner_data[f'cam{i:03d}_Tvecs'][random_index1]
                 rvec2 = pointcorner_data[f'cam{j:03d}_Rvecs'][random_index2]
@@ -1186,6 +1186,7 @@ def calib_initalExtri(out_path,num_pic,num_board,num_cam,pattern,is_fisheye,root
                 P2[:3, :3] = R2
                 P2[:3, 3] = t2
                 T_21 = np.dot(P2, np.linalg.inv(P1))
+
                 R = T_21[:3, :3]
                 t = T_21[:3, 3]
                 R_saved = np.matmul(R, R_abs[i])

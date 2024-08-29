@@ -268,7 +268,7 @@ if __name__ == '__main__':
     #plot figure
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    poses = np.array(combined_pose)
+    poses = np.array(poses_ba)
     # 计算相机位置的中心点
     center = np.mean(poses[:, :3, 3], axis=0)
 
