@@ -1,2 +1,0 @@
-# colmap geomar fork at 9482ee21439ff7c37c149dca15a2005f6bef6e47
-add_subdirectory(colmap EXCLUDE_FROM_ALL)
